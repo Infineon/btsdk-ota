@@ -1,5 +1,5 @@
 /*
- * Copyright 2019, Cypress Semiconductor Corporation or a subsidiary of
+ * Copyright 2020, Cypress Semiconductor Corporation or a subsidiary of
  * Cypress Semiconductor Corporation. All Rights Reserved.
  *
  * This software, including source code, documentation and related
@@ -57,6 +57,7 @@
 #include "wiced_bt_gatt.h"
 #include "wiced_firmware_upgrade.h"
 #include "wiced_bt_trace.h"
+#include "wiced_bt_event.h"
 #include "sha256.h"
 #include "wiced_bt_l2c.h"
 
@@ -67,6 +68,8 @@
 /******************************************************
  *                      Constants
  ******************************************************/
+#define VERIFY_CRC      0
+#define VERIFY_ECDSA    1
 
 
 /******************************************************
@@ -83,7 +86,6 @@ static wiced_bt_gatt_status_t ota_fw_upgrade_send_notification(uint16_t conn_id,
 static void                   ota_fw_upgrade_reset_timeout(uint32_t param);
 extern UINT32 crc32_Update( UINT32 crc, UINT8 *buf, UINT16 len );
 extern uint32_t update_crc32(uint32_t crc, uint8_t *buf, uint16_t len);
-static uint16_t ota_conn_id = 0;
 extern void allowSlaveLatency(BOOL8 allow);
 
 /*
@@ -167,22 +169,26 @@ wiced_bt_gatt_status_t wiced_ota_fw_upgrade_indication_cfm_handler(uint16_t conn
 
     if (handle == HANDLE_OTA_FW_UPGRADE_CONTROL_POINT)
     {
-#ifdef WICED_OTA_VERSION_2
-        if (p_state->state == OTA_STATE_APPLY)
-#else
         if (p_state->state == OTA_STATE_VERIFIED)
-#endif
         {
             if (ota_fw_upgrade_status_callback)
             {
                 (*ota_fw_upgrade_status_callback)(OTA_FW_UPGRADE_STATUS_COMPLETED);
             }
 
-            // disconnect and start timer to trigger hardware reset 1 second later
-            wiced_bt_gatt_disconnect(conn_id);
-            wiced_deinit_timer(&ota_fw_upgrade_state.reset_timer);
-            wiced_init_timer(&ota_fw_upgrade_state.reset_timer, ota_fw_upgrade_reset_timeout, 0, WICED_SECONDS_TIMER);
-            wiced_start_timer(&ota_fw_upgrade_state.reset_timer, 1);
+            if (ota_fw_upgrade_state.transfer_only && ota_fw_upgrade_state.p_event_callback)
+            {
+                uint8_t status = 0;
+                (*ota_fw_upgrade_state.p_event_callback)(OTA_FW_UPGRADE_EVENT_COMPLETED, &status);
+            }
+            else
+            {
+                // disconnect and start timer to trigger hardware reset 1 second later
+                wiced_bt_gatt_disconnect(conn_id);
+                wiced_deinit_timer(&ota_fw_upgrade_state.reset_timer);
+                wiced_init_timer(&ota_fw_upgrade_state.reset_timer, ota_fw_upgrade_reset_timeout, 0, WICED_SECONDS_TIMER);
+                wiced_start_timer(&ota_fw_upgrade_state.reset_timer, 1);
+            }
         }
         return WICED_BT_GATT_SUCCESS;
     }
@@ -192,6 +198,96 @@ wiced_bt_gatt_status_t wiced_ota_fw_upgrade_indication_cfm_handler(uint16_t conn
 wiced_bool_t wiced_ota_fw_upgrade_is_gatt_handle(uint16_t handle)
 {
     return HANDLE_OTA_FW_UPGRADE_SERVICE <= handle && handle <= HANDLE_OTA_FW_UPGRADE_APP_INFO;
+}
+
+/*
+ * This function is executed after we received valid Write Req to perform verification and send Write Rsp
+ */
+int perform_verification(void *data)
+{
+    uint16_t conn_id = ota_fw_upgrade_state.conn_id;
+    int method = (int)data;
+    ota_fw_upgrade_state_t *p_state = &ota_fw_upgrade_state;
+    uint8_t value = WICED_OTA_UPGRADE_STATUS_OK;
+    int32_t verified;
+
+    if (p_state->transfer_only)
+    {
+        // For transfer-only verify is done elsewhere
+        verified = WICED_TRUE;
+    }
+    else
+    {
+        verified = (method == VERIFY_CRC) ? ota_fw_upgrade_verify() : ota_sec_fw_upgrade_verify();
+    }
+
+    if (!verified)
+    {
+        WICED_BT_TRACE("Verify failed\n");
+        p_state->state = OTA_STATE_ABORTED;
+        value = WICED_OTA_UPGRADE_STATUS_VERIFICATION_FAILED;
+        ota_fw_upgrade_send_notification(conn_id, HANDLE_OTA_FW_UPGRADE_CONTROL_POINT, 1, &value);
+
+        if (ota_fw_upgrade_status_callback)
+        {
+            (*ota_fw_upgrade_status_callback)(OTA_FW_UPGRADE_STATUS_ABORTED);
+        }
+        if (p_state->transfer_only && p_state->p_event_callback)
+        {
+            uint8_t status = 1;
+            (*p_state->p_event_callback)(OTA_FW_UPGRADE_EVENT_COMPLETED, &status);
+        }
+        return WICED_TRUE;
+    }
+    WICED_BT_TRACE("Verify success\n");
+    p_state->state = OTA_STATE_VERIFIED;
+
+    // if we are able to send indication (good host) wait for the confirmation before the reboot
+    if (ota_client_config_descriptor & GATT_CLIENT_CONFIG_INDICATION)
+    {
+        if (ota_fw_upgrade_send_data_callback != NULL)
+        {
+            if (ota_fw_upgrade_send_data_callback(WICED_FALSE, conn_id, HANDLE_OTA_FW_UPGRADE_CONTROL_POINT, 1, &value) == WICED_BT_GATT_SUCCESS)
+            {
+                return WICED_TRUE;
+            }
+        }
+        else
+        {
+            if (wiced_bt_gatt_send_indication(conn_id, HANDLE_OTA_FW_UPGRADE_CONTROL_POINT, 1, &value) == WICED_BT_GATT_SUCCESS)
+            {
+                return WICED_TRUE;
+            }
+        }
+    }
+    // if we are unable to send indication, try to send notification and start 1 sec timer
+    if (ota_client_config_descriptor & GATT_CLIENT_CONFIG_NOTIFICATION)
+    {
+        if (ota_fw_upgrade_send_notification(conn_id, HANDLE_OTA_FW_UPGRADE_CONTROL_POINT, 1, &value) == WICED_BT_GATT_SUCCESS)
+        {
+            // notify application that we are going down
+            if (ota_fw_upgrade_status_callback)
+            {
+                (*ota_fw_upgrade_status_callback)(OTA_FW_UPGRADE_STATUS_COMPLETED);
+            }
+            if (p_state->transfer_only)
+            {
+                uint8_t status = 0;
+                if (p_state->p_event_callback)
+                    (*p_state->p_event_callback)(OTA_FW_UPGRADE_EVENT_COMPLETED, &status);
+            }
+            else
+            {
+                // Start timer to disconnect in a second (parameter passed to the function is conn_id)
+                wiced_deinit_timer(&ota_fw_upgrade_state.reset_timer);
+                wiced_init_timer(&ota_fw_upgrade_state.reset_timer, ota_fw_upgrade_reset_timeout, conn_id, WICED_SECONDS_TIMER);
+                wiced_start_timer(&ota_fw_upgrade_state.reset_timer, 1);
+            }
+            return WICED_TRUE;
+        }
+    }
+    WICED_BT_TRACE("failed to notify the app\n");
+    return WICED_TRUE;
 }
 
 /*
@@ -209,11 +305,6 @@ wiced_bool_t ota_fw_upgrade_handle_command(uint16_t conn_id, uint8_t *data, int3
 #endif
     if (command == WICED_OTA_UPGRADE_COMMAND_PREPARE_DOWNLOAD)
     {
-        if (len == 11)
-        {
-            p_state->fw_cid = (data[1] << 8) + data[2];
-            memcpy(p_state->fw_id, &data[3], OTA_FWID_LENGTH);
-        }
 #if (defined(CYW20719B1) || defined(CYW20721B1) || defined(CYW20721B2) || defined(CYW20719B2) || defined (CYW20819A1))
 #ifdef DISABLED_SLAVE_LATENCY_ONLY
         allowSlaveLatency(FALSE);
@@ -234,6 +325,10 @@ wiced_bool_t ota_fw_upgrade_handle_command(uint16_t conn_id, uint8_t *data, int3
         {
             (*ota_fw_upgrade_status_callback)(OTA_FW_UPGRADE_STATUS_STARTED);
         }
+        if (ota_fw_upgrade_state.transfer_only && ota_fw_upgrade_state.p_event_callback)
+        {
+            (*ota_fw_upgrade_state.p_event_callback)(OTA_FW_UPGRADE_EVENT_STARTED, NULL);
+        }
         return WICED_TRUE;
     }
     if (command == WICED_OTA_UPGRADE_COMMAND_ABORT)
@@ -250,53 +345,13 @@ wiced_bool_t ota_fw_upgrade_handle_command(uint16_t conn_id, uint8_t *data, int3
         {
             (*ota_fw_upgrade_status_callback)(OTA_FW_UPGRADE_STATUS_ABORTED);
         }
+        if (ota_fw_upgrade_state.transfer_only && ota_fw_upgrade_state.p_event_callback)
+        {
+            uint8_t status = 1;
+            (*ota_fw_upgrade_state.p_event_callback)(OTA_FW_UPGRADE_EVENT_COMPLETED, &status);
+        }
         return WICED_FALSE;
     }
-#ifdef WICED_OTA_VERSION_2
-    if (command == WICED_OTA_UPGRADE_COMMAND_APPLY && p_state->fw_verified)
-    {
-        p_state->state = OTA_STATE_APPLY;
-
-        // if we are able to send indication (good host) wait for the confirmation before the reboot
-        if (ota_client_config_descriptor & GATT_CLIENT_CONFIG_INDICATION)
-        {
-            if (ota_fw_upgrade_send_data_callback != NULL)
-            {
-                if (ota_fw_upgrade_send_data_callback(WICED_FALSE, conn_id, HANDLE_OTA_FW_UPGRADE_CONTROL_POINT, 1, &value) == WICED_BT_GATT_SUCCESS)
-                {
-                    return WICED_TRUE;
-                }
-            }
-            else
-            {
-                if (wiced_bt_gatt_send_indication(conn_id, HANDLE_OTA_FW_UPGRADE_CONTROL_POINT, 1, &value) == WICED_BT_GATT_SUCCESS)
-                {
-                    return WICED_TRUE;
-                }
-            }
-        }
-        // if we are unable to send indication, try to send notification and start 1 sec timer
-        if (ota_client_config_descriptor & GATT_CLIENT_CONFIG_NOTIFICATION)
-        {
-            if (ota_fw_upgrade_send_notification(conn_id, HANDLE_OTA_FW_UPGRADE_CONTROL_POINT, 1, &value) == WICED_BT_GATT_SUCCESS)
-            {
-                // notify application that we are going down
-                if (ota_fw_upgrade_status_callback)
-                {
-                    (*ota_fw_upgrade_status_callback)(OTA_FW_UPGRADE_STATUS_COMPLETED);
-                }
-                // Start timer to disconnect in a second (parameter passed to the function is conn_id)
-                ota_conn_id = conn_id;
-                wiced_deinit_timer(&ota_fw_upgrade_state.reset_timer);
-                wiced_init_timer(&ota_fw_upgrade_state.reset_timer, ota_fw_upgrade_reset_timeout, conn_id, WICED_SECONDS_TIMER);
-                wiced_start_timer(&ota_fw_upgrade_state.reset_timer, 1);
-                return WICED_TRUE;
-            }
-        }
-        WICED_BT_TRACE("failed to notify the app\n");
-        return WICED_FALSE;
-    }
-#endif
 
     switch (p_state->state)
     {
@@ -313,22 +368,24 @@ wiced_bool_t ota_fw_upgrade_handle_command(uint16_t conn_id, uint8_t *data, int3
                 return WICED_FALSE;
             }
 
-            WICED_BT_TRACE("calling wiced_firmware_upgrade_init_nv_locations\n");
-            if (!wiced_firmware_upgrade_init_nv_locations())
+            if (!ota_fw_upgrade_state.transfer_only)
             {
-                WICED_BT_TRACE("failed init nv locations\n");
-                value = WICED_OTA_UPGRADE_STATUS_INVALID_IMAGE;
-                ota_fw_upgrade_send_notification(conn_id, HANDLE_OTA_FW_UPGRADE_CONTROL_POINT, 1, &value);
-                return WICED_FALSE;
+                WICED_BT_TRACE("calling wiced_firmware_upgrade_init_nv_locations\n");
+                if (!wiced_firmware_upgrade_init_nv_locations())
+                {
+                    WICED_BT_TRACE("failed init nv locations\n");
+                    value = WICED_OTA_UPGRADE_STATUS_INVALID_IMAGE;
+                    ota_fw_upgrade_send_notification(conn_id, HANDLE_OTA_FW_UPGRADE_CONTROL_POINT, 1, &value);
+                    return WICED_FALSE;
+                }
+                WICED_BT_TRACE("done calling wiced_firmware_upgrade_init_nv_locations\n");
             }
-            WICED_BT_TRACE("done calling wiced_firmware_upgrade_init_nv_locations\n");
 
             p_state->state                = OTA_STATE_DATA_TRANSFER;
             p_state->current_offset       = 0;
             p_state->current_block_offset = 0;
             p_state->total_offset         = 0;
             p_state->total_len            = data[1] + (data[2] << 8) + (data[3] << 16) + (data[4] << 24);
-            p_state->fw_verified          = WICED_FALSE;
 #if OTA_UPGRADE_DEBUG
             p_state->recv_crc32           = 0xffffffff;
 #endif
@@ -372,80 +429,30 @@ wiced_bool_t ota_fw_upgrade_handle_command(uint16_t conn_id, uint8_t *data, int3
                 {
                     (*ota_fw_upgrade_status_callback)(OTA_FW_UPGRADE_STATUS_ABORTED);
                 }
+                if (ota_fw_upgrade_state.transfer_only && ota_fw_upgrade_state.p_event_callback)
+                {
+                    uint8_t status = 1;
+                    (*ota_fw_upgrade_state.p_event_callback)(OTA_FW_UPGRADE_EVENT_COMPLETED, &status);
+                }
                 return WICED_TRUE;
             }
 
-            // For none-secure case the command should have 4 bytes CRC32
+            // Verification is a lengthy process.  We should serialize performing the verification, i.e.
+            // after returning from this function, the stack will be able to send GATT Write Rsp to the client.
+            // Result of the verification will be sent as a notification or indication
             if (p_ecdsa_public_key == NULL)
             {
+                // For none-secure case the command should have 4 bytes CRC32
                 p_state->crc32 = data[1] + (data[2] << 8) + (data[3] << 16) + (data[4] << 24);
-                verified = ota_fw_upgrade_verify();
+                wiced_app_event_serialize(perform_verification, (void *)VERIFY_CRC);
             }
             else
             {
                 WICED_BT_TRACE("ota_sec_fw_upgrade_verify() \n");
-                verified = ota_sec_fw_upgrade_verify();
+                wiced_app_event_serialize(perform_verification, (void *)VERIFY_ECDSA);
             }
 
-            if (!verified)
-            {
-                WICED_BT_TRACE("Verify failed\n");
-                p_state->state = OTA_STATE_ABORTED;
-                value = WICED_OTA_UPGRADE_STATUS_VERIFICATION_FAILED;
-                ota_fw_upgrade_send_notification(conn_id, HANDLE_OTA_FW_UPGRADE_CONTROL_POINT, 1, &value);
-
-                if (ota_fw_upgrade_status_callback)
-                {
-                    (*ota_fw_upgrade_status_callback)(OTA_FW_UPGRADE_STATUS_ABORTED);
-                }
-                return WICED_TRUE;
-            }
-            WICED_BT_TRACE("Verify success\n");
-            p_state->state = OTA_STATE_VERIFIED;
-#ifdef WICED_OTA_VERSION_2
-            p_state->fw_verified = WICED_TRUE;
-            ota_fw_upgrade_send_notification(conn_id, HANDLE_OTA_FW_UPGRADE_CONTROL_POINT, 1, &value);
             return WICED_TRUE;
-#else
-            // if we are able to send indication (good host) wait for the confirmation before the reboot
-            if (ota_client_config_descriptor & GATT_CLIENT_CONFIG_INDICATION)
-            {
-                if (ota_fw_upgrade_send_data_callback != NULL)
-                {
-                    if (ota_fw_upgrade_send_data_callback(WICED_FALSE, conn_id, HANDLE_OTA_FW_UPGRADE_CONTROL_POINT, 1, &value) == WICED_BT_GATT_SUCCESS)
-                    {
-                        return WICED_TRUE;
-                    }
-                }
-                else
-                {
-                    if (wiced_bt_gatt_send_indication(conn_id, HANDLE_OTA_FW_UPGRADE_CONTROL_POINT, 1, &value) == WICED_BT_GATT_SUCCESS)
-                    {
-                        return WICED_TRUE;
-                    }
-                }
-            }
-            // if we are unable to send indication, try to send notification and start 1 sec timer
-            if (ota_client_config_descriptor & GATT_CLIENT_CONFIG_NOTIFICATION)
-            {
-                if (ota_fw_upgrade_send_notification(conn_id, HANDLE_OTA_FW_UPGRADE_CONTROL_POINT, 1, &value) == WICED_BT_GATT_SUCCESS)
-                {
-                    // notify application that we are going down
-                    if (ota_fw_upgrade_status_callback)
-                    {
-                        (*ota_fw_upgrade_status_callback)(OTA_FW_UPGRADE_STATUS_COMPLETED);
-                    }
-                    // Start timer to disconnect in a second (parameter passed to the function is conn_id)
-                    ota_conn_id = conn_id;
-                    wiced_deinit_timer(&ota_fw_upgrade_state.reset_timer);
-                    wiced_init_timer(&ota_fw_upgrade_state.reset_timer, ota_fw_upgrade_reset_timeout, conn_id, WICED_SECONDS_TIMER);
-                    wiced_start_timer(&ota_fw_upgrade_state.reset_timer, 1);
-                    return WICED_TRUE;
-                }
-            }
-            WICED_BT_TRACE("failed to notify the app\n");
-            return WICED_FALSE;
-#endif
         }
         break;
 
@@ -552,11 +559,23 @@ wiced_bool_t ota_fw_upgrade_handle_data(uint16_t conn_id, uint8_t *data, int32_t
             // WICED_BT_TRACE("write offset:%x\n", p_state->total_offset);
             //dump_hex(p_state->read_buffer, p_state->current_block_offset);
 #endif
-            // write should be on the word boundary and in full words, we may write a bit more
-            written = wiced_firmware_upgrade_store_to_nv(p_state->total_offset, p_state->read_buffer, (p_state->current_block_offset + 3) & 0xFFFFFFFC);
-            if(written != ((p_state->current_block_offset + 3) & 0xFFFFFFFC))
+            if (ota_fw_upgrade_state.transfer_only && ota_fw_upgrade_state.p_event_callback)
             {
-                WICED_BT_TRACE("write failed, returned %x\n", written);
+                wiced_bt_ota_fw_upgrad_event_data_t event_data;
+
+                event_data.offset = p_state->total_offset;
+                event_data.data_len = p_state->current_block_offset;
+                event_data.p_data = p_state->read_buffer;
+                (*ota_fw_upgrade_state.p_event_callback)(OTA_FW_UPGRADE_EVENT_DATA, &event_data);
+            }
+            else
+            {
+                // write should be on the word boundary and in full words, we may write a bit more
+                written = wiced_firmware_upgrade_store_to_nv(p_state->total_offset, p_state->read_buffer, (p_state->current_block_offset + 3) & 0xFFFFFFFC);
+                if(written != ((p_state->current_block_offset + 3) & 0xFFFFFFFC))
+                {
+                    WICED_BT_TRACE("write failed, returned %x\n", written);
+                }
             }
             p_state->total_offset        += p_state->current_block_offset;
             p_state->current_block_offset = 0;
@@ -612,13 +631,10 @@ wiced_bt_gatt_status_t ota_fw_upgrade_send_notification(uint16_t conn_id, uint16
  */
 void ota_fw_upgrade_reset_timeout(uint32_t param)
 {
-    uint16_t conn_id = ota_conn_id; // TODO : Should use param instead of  ota_conn_id
-
     // if conn_id is not zero, connection is still up, disconnect and start 1 second timer before reset
-    if (conn_id)
+    if (ota_fw_upgrade_state.conn_id)
     {
-       wiced_bt_gatt_disconnect(conn_id);
-       ota_conn_id = 0;
+       wiced_bt_gatt_disconnect(ota_fw_upgrade_state.conn_id);
        wiced_deinit_timer(&ota_fw_upgrade_state.reset_timer);
        wiced_init_timer(&ota_fw_upgrade_state.reset_timer, ota_fw_upgrade_reset_timeout, 0, WICED_SECONDS_TIMER);
        wiced_start_timer(&ota_fw_upgrade_state.reset_timer, 1);
@@ -627,16 +643,10 @@ void ota_fw_upgrade_reset_timeout(uint32_t param)
        wiced_firmware_upgrade_finish();
 }
 
-wiced_bool_t wiced_ota_fw_upgrade_get_new_fw_info(uint16_t *company_id, uint8_t *fw_id_len, uint8_t *fw_id)
+wiced_bool_t wiced_ota_fw_upgrade_set_transfer_mode(wiced_bool_t transfer_only, wiced_ota_firmware_event_callback_t *p_event_callback)
 {
-    if (ota_fw_upgrade_state.state != OTA_STATE_VERIFIED)
-        return WICED_FALSE;
+    ota_fw_upgrade_state.transfer_only = transfer_only;
+    ota_fw_upgrade_state.p_event_callback = p_event_callback;
 
-    if (*fw_id_len < OTA_FWID_LENGTH)
-        return WICED_FALSE;
-
-    *company_id = ota_fw_upgrade_state.fw_cid;
-    *fw_id_len = OTA_FWID_LENGTH;
-    memcpy(fw_id, ota_fw_upgrade_state.fw_id, OTA_FWID_LENGTH);
     return WICED_TRUE;
 }

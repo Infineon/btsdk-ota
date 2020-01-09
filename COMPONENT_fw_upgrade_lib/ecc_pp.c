@@ -1,5 +1,5 @@
 /*
- * Copyright 2019, Cypress Semiconductor Corporation or a subsidiary of
+ * Copyright 2020, Cypress Semiconductor Corporation or a subsidiary of
  * Cypress Semiconductor Corporation. All Rights Reserved.
  *
  * This software, including source code, documentation and related
@@ -69,7 +69,7 @@ UINT32 nprime[KEY_LENGTH_DWORDS] = { 0xEE00BC4F, 0xCCD1C8AA, 0x7D74D2E4, 0x48C94
 
 UINT32 rr[KEY_LENGTH_DWORDS] = { 0xBE79EEA2, 0x83244C95, 0x49BD6FA6, 0x4699799C, 0x2B6BEC59, 0x2845B239, 0xF3D95620, 0x66E12D94 };
 
-#if ((OTA_CHIP == 20703) || (WICEDX == TRUE))
+#if ((OTA_CHIP == 20703) || (WICEDX == TRUE) || (defined(CYW20706A2)))
 void CopyPoint(Point *q, Point *p)
 {
     memcpy(q, p, sizeof(Point));

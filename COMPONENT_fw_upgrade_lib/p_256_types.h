@@ -1,5 +1,5 @@
 /*
- * Copyright 2019, Cypress Semiconductor Corporation or a subsidiary of
+ * Copyright 2020, Cypress Semiconductor Corporation or a subsidiary of
  * Cypress Semiconductor Corporation. All Rights Reserved.
  *
  * This software, including source code, documentation and related
@@ -86,8 +86,10 @@ typedef signed   short      INT16;
 typedef unsigned long        UINT32;
 typedef signed   long        INT32;
 #else
+#ifndef CYW20706A2
 typedef unsigned int        UINT32;
 typedef signed   int        INT32;
+#endif
 #endif
 
 typedef unsigned long long  UINT64;
@@ -118,7 +120,9 @@ typedef int MI32;
 
 
 // This definition is for backward compatibility
+#ifndef CYW20706A2
 typedef UINT32          BOOL32;
+#endif
 typedef UINT8            BOOL8;
 
 #ifndef NULL

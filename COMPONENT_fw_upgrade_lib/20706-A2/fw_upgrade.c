@@ -1,5 +1,5 @@
 /*
- * Copyright 2019, Cypress Semiconductor Corporation or a subsidiary of
+ * Copyright 2020, Cypress Semiconductor Corporation or a subsidiary of
  * Cypress Semiconductor Corporation. All Rights Reserved.
  *
  * This software, including source code, documentation and related
@@ -235,6 +235,9 @@ wiced_bool_t wiced_firmware_upgrade_erase_nv(uint32_t start, uint32_t size)
     uint32_t sector_size = (sfi_sectorErase256K) ? WICED_FW_UPGRADE_SF_SECTOR_SIZE_256K : WICED_FW_UPGRADE_SF_SECTOR_SIZE_4K;
     uint32_t offset;
 
+    start += g_fw_upgrade.upgrade_ds_location;
+    start = CONVERT_TO_NV_VIRTUAL_ADDRESS(start);
+
     if (start % sector_size)
         return WICED_FALSE;
 
@@ -261,7 +264,6 @@ wiced_bool_t fw_upgrade_is_sector_erased(uint32_t offset)
 // Stores to the physical NV storage medium. if success, return len, else returns 0
 uint32_t wiced_firmware_upgrade_store_to_nv(uint32_t offset, uint8_t *data, uint32_t len)
 {
-    uint32_t _offset = offset;
     uint32_t sector_size = (sfi_sectorErase256K) ? WICED_FW_UPGRADE_SF_SECTOR_SIZE_256K : WICED_FW_UPGRADE_SF_SECTOR_SIZE_4K;
     uint32_t bytes_written;
 
@@ -514,8 +516,8 @@ wiced_bool_t wiced_bt_fw_read_meta_data(uint8_t partition, uint8_t *p_data, uint
         if (wiced_firmware_upgrade_retrieve_from_nv(0, buffer, IMAGE_META_DATA_PREFIX_LEN) == IMAGE_META_DATA_PREFIX_LEN)
         {
             STREAM_TO_UINT32(temp, p);
-            if (temp != 0xFFFFFFFF)
-                return WICED_FALSE;
+            //if (temp != 0xFFFFFFFF)
+            //    return WICED_FALSE;
             STREAM_TO_UINT32(temp, p);
             if (temp != IMAGE_META_DATA_ID)
                 return WICED_FALSE;

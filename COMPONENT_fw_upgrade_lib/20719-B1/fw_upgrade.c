@@ -1,5 +1,5 @@
 /*
- * Copyright 2019, Cypress Semiconductor Corporation or a subsidiary of
+ * Copyright 2020, Cypress Semiconductor Corporation or a subsidiary of
  * Cypress Semiconductor Corporation. All Rights Reserved.
  *
  * This software, including source code, documentation and related
@@ -840,8 +840,8 @@ wiced_bool_t wiced_bt_fw_read_meta_data(uint8_t partition, uint8_t *p_data, uint
         if (wiced_firmware_upgrade_retrieve_from_nv(0, buffer, IMAGE_META_DATA_PREFIX_LEN) == IMAGE_META_DATA_PREFIX_LEN)
         {
             STREAM_TO_UINT32(temp, p);
-            if (temp != 0xFFFFFFFF)
-                return WICED_FALSE;
+            //if (temp != 0xFFFFFFFF)
+            //    return WICED_FALSE;
             STREAM_TO_UINT32(temp, p);
             if (temp != IMAGE_META_DATA_ID)
                 return WICED_FALSE;

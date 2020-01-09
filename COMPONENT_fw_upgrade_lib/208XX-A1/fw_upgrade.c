@@ -1,5 +1,5 @@
 /*
- * Copyright 2019, Cypress Semiconductor Corporation or a subsidiary of
+ * Copyright 2020, Cypress Semiconductor Corporation or a subsidiary of
  * Cypress Semiconductor Corporation. All Rights Reserved.
  *
  * This software, including source code, documentation and related
@@ -62,30 +62,7 @@
  *                      Constants
  ******************************************************/
 #ifdef ENABLE_SFLASH_UPGRADE
-#define WICED_FW_UPGRADE_SF_SECTOR_SIZE             (4 *1024) //Serial Flash Sector size
-
-// In fail safe ota patch, boot will decide active DS location
-// No access SS after OTA verification done
-#define DS2_MAGIC_NUMBER_BUFFER_LEN     8
-
-#pragma pack(1)
-typedef union
-{
-    UINT8  buffer[DS2_MAGIC_NUMBER_BUFFER_LEN + sizeof(UINT32)];
-    struct
-    {
-        UINT8   magicNumber[DS2_MAGIC_NUMBER_BUFFER_LEN];
-        UINT32  dsLoc;
-    } ds2Info;
-} tDs2Record;
-
-#pragma pack()
-#define FAIL_SAFE_RESERVE_SECTOR_START  0x1000
-#define FAIL_SAFE_RESERVE_SECTOR_END    0x2000
-
-#define DS2_MAGIC_NUMBER_BUFFER_LOC (0x2000 - sizeof(tDs2Record))
-UINT8  magic_num_ds2[DS2_MAGIC_NUMBER_BUFFER_LEN + 4] = { 0xAA, 0x55, 0xF0, 0x0F, 0x68, 0xE5, 0x97, 0xD2, 0,0,0,0};
-
+#define WICED_FW_UPGRADE_SF_SECTOR_SIZE   OTA_SFLASH_SECTOR_SIZE //Serial Flash Sector size
 #define WICED_FW_UPGRADE_SF_START       0
 #endif
 
@@ -313,10 +290,6 @@ extern CONFIG_INFO_t        g_config_Info;
 
 #ifdef ENABLE_SFLASH_UPGRADE
 extern uint32_t             Config_DS_End_Location;
-extern BOOL32 wiced_sfi_erase(UINT32 addr, UINT32 len);
-extern BOOL32 wiced_hal_sflash_verify_addr_noDScheck(uint32_t startAddr, uint32_t len);
-extern UINT32 sfi_write(UINT32 addr, IN UINT8 *buffer, UINT32 len);
-extern BOOL32 sfi_erase(UINT32 addr, UINT32 len);
 #endif
 
 /* internal functions */
@@ -381,7 +354,7 @@ wiced_bool_t wiced_firmware_upgrade_init(wiced_fw_upgrade_nv_loc_len_t *p_sflash
 #ifdef ENABLE_SFLASH_UPGRADE
     g_wiced_sflash_size = sflash_size;
 #ifdef OTA_FW_UPGRADE_SFLASH_COPY
-    wiced_ofu_sflash_init();
+    wiced_ofu_sflash_init(WICED_OFU_DEFAULT_SPI_CLK);
 #endif
 #endif
 
@@ -484,8 +457,22 @@ wiced_bool_t wiced_firmware_upgrade_erase_nv(uint32_t start, uint32_t size)
     if (start % EF_PAGE_SIZE)
         return WICED_FALSE;
 
-    for (offset = 0; offset < size; offset += EF_PAGE_SIZE)
-        wiced_hal_eflash_erase(start + offset + g_fw_upgrade.upgrade_ds_location - EF_BASE_ADDR, EF_PAGE_SIZE);
+    if (g_fw_upgrade.upgrade_type == FW_UPDATE_INTF_EFLASH)
+    {
+        for (offset = 0; offset < size; offset += EF_PAGE_SIZE)
+        {
+            wiced_hal_eflash_erase(start + offset + g_fw_upgrade.upgrade_ds_location - EF_BASE_ADDR, EF_PAGE_SIZE);
+        }
+    }
+#ifdef ENABLE_SFLASH_UPGRADE
+    else if (g_fw_upgrade.upgrade_type == FW_UPDATE_INTF_SFLASH)
+    {
+        for (offset = 0; offset < size; offset += WICED_FW_UPGRADE_SF_SECTOR_SIZE)
+        {
+            fw_upgrade_erase_sector(start + offset);
+        }
+    }
+#endif
 
     p_gdata->erase_start = start;
     p_gdata->bytes_erased = offset;
@@ -552,7 +539,7 @@ uint32_t wiced_firmware_upgrade_store_to_nv(uint32_t offset, uint8_t *data, uint
         offset += g_fw_upgrade.upgrade_ds_location;
 
         // if this is a beginning of a new sector erase first.
-        if ((offset % WICED_FW_UPGRADE_SF_SECTOR_SIZE) == 0)
+        if ((offset % WICED_FW_UPGRADE_SF_SECTOR_SIZE) == 0 && !fw_upgrade_is_sector_erased(offset))
         {
             fw_upgrade_erase_sector(offset);
         }
@@ -786,7 +773,6 @@ uint8_t firmware_upgrade_switch_sflash_active_ds(void)
     wiced_fw_upgrade_t *p_gdata = &g_fw_upgrade;
     uint32_t offset;
     BOOL32 SS_updated = FALSE;
-#ifdef OTA_FW_UPGRADE_SFLASH_COPY
     uint8_t *ptr;
 
     // invalidate DS1 so reboot runs DS2 sflash copy to ocf
@@ -809,81 +795,6 @@ uint8_t firmware_upgrade_switch_sflash_active_ds(void)
     WICED_BT_TRACE("writing to invalidate DS1 signature\n");
     wiced_hal_eflash_erase(g_fw_upgrade.active_ds_location - EF_BASE_ADDR, EF_PAGE_SIZE);
     wiced_hal_eflash_write(g_fw_upgrade.active_ds_location - EF_BASE_ADDR, ptr, EF_PAGE_SIZE);
-#else
-    uint32_t ds2_magic_location = DS2_MAGIC_NUMBER_BUFFER_LOC;
-    tDs2Record ds2Record;
-    uint32_t sector_size = sfi_sectorErase256K ? WICED_FW_UPGRADE_SF_SECTOR_SIZE_256K : WICED_FW_UPGRADE_SF_SECTOR_SIZE_4K;
-
-    // Sector must be erased before writing to it.
-    wiced_sfi_erase(FAIL_SAFE_RESERVE_SECTOR_START, sector_size);
-
-    if (p_gdata->active_ds_location == g_nv_loc_len.ds1_loc)
-    {
-        // Then update the DS with the upgrade DS.
-        magic_num_ds2[DS2_MAGIC_NUMBER_BUFFER_LEN] = (p_gdata->upgrade_ds_location & 0xFF);
-        magic_num_ds2[DS2_MAGIC_NUMBER_BUFFER_LEN+1] = (p_gdata->upgrade_ds_location & 0xFF00) >> 8;
-        magic_num_ds2[DS2_MAGIC_NUMBER_BUFFER_LEN+2] = (p_gdata->upgrade_ds_location & 0xFF0000) >> 16;
-        magic_num_ds2[DS2_MAGIC_NUMBER_BUFFER_LEN+3] = (p_gdata->upgrade_ds_location & 0xFF000000) >> 24;
-        // Write this to the upgrade SS.
-        if (sfi_write(ds2_magic_location , magic_num_ds2, DS2_MAGIC_NUMBER_BUFFER_LEN+4) != (DS2_MAGIC_NUMBER_BUFFER_LEN+4))
-        {
-            WICED_BT_TRACE("Could not update the 2nd SS block w/ magic number and DS location!\n");
-            return 0;
-        }
-    }
-
-    //double check if SS section is updated correctly by
-    // reading the magic number and alternate DS location from serial flash
-    if (sfi_read(ds2_magic_location, (UINT8 *)&ds2Record,
-                    sizeof(tDs2Record)) == sizeof(tDs2Record))
-    {
-        // if the magic number is correct
-        if (!memcmp(ds2Record.ds2Info.magicNumber, magic_num_ds2, DS2_MAGIC_NUMBER_BUFFER_LEN))
-        {
-            if (p_gdata->active_ds_location == g_nv_loc_len.ds1_loc)
-            {
-                SS_updated = TRUE;
-            }
-        }
-        else
-        {
-            if (p_gdata->active_ds_location == g_nv_loc_len.ds2_loc)
-            {
-                SS_updated = TRUE;
-            }
-        }
-    }
-
-    // Now we can safely erase old DS section
-    if (SS_updated)
-    {
-        // erase first sector of DS
-        fw_upgrade_erase_sector(p_gdata->active_ds_location);
-    }
-#ifdef DEBUG_OTA_UPGRADE
-    memset(read_magic, 0xAA, DS2_MAGIC_NUMBER_BUFFER_LEN + sizeof(UINT32));
-    if (sfi_read(ds2_magic_location, read_magic, DS2_MAGIC_NUMBER_BUFFER_LEN + 4) == (DS2_MAGIC_NUMBER_BUFFER_LEN+4))
-    {
-        WICED_BT_TRACE("\nwritten\n");
-        dump_hex(magic_num_ds2, DS2_MAGIC_NUMBER_BUFFER_LEN+4);
-
-        WICED_BT_TRACE("\nread back\n");
-        dump_hex(read_magic, DS2_MAGIC_NUMBER_BUFFER_LEN+4);
-
-        if (!memcmp(read_magic, magic_num_ds2, DS2_MAGIC_NUMBER_BUFFER_LEN+4))
-            WICED_BT_TRACE("ds2 magic data written successfully \n");
-        else
-            WICED_BT_TRACE("ds2 magic data write fail \n");
-
-        return 1;
-    }
-    else
-    {
-        WICED_BT_TRACE("ds2 magic data written not matched\n");
-        return 0;
-    }
-#endif
-#endif
     return 1;
 }
 
@@ -892,11 +803,7 @@ void fw_upgrade_erase_sector(uint32_t erase_addr)
 {
     WICED_BT_TRACE("fw_upgrade_erase_sector:%x len:%d ts 0x%x\n",
                     erase_addr, WICED_FW_UPGRADE_SF_SECTOR_SIZE, clock_SystemTimeMicroseconds32_nolock());
-#ifdef OTA_FW_UPGRADE_SFLASH_COPY
-    sfi_erase(erase_addr, WICED_FW_UPGRADE_SF_SECTOR_SIZE);
-#else
-    wiced_hal_sflash_erase(erase_addr, sector_size);
-#endif
+    wiced_hal_sflash_erase(erase_addr,  WICED_FW_UPGRADE_SF_SECTOR_SIZE);
     WICED_BT_TRACE("   complete\n");
 
 }
@@ -918,13 +825,7 @@ uint32_t fw_upgrade_write_mem(uint32_t write_to, uint8_t *data, uint32_t len)
 {
     uint32_t rc;
     WICED_BT_TRACE("sflash_write to:%x len:%d\n", write_to, len);
-#ifdef OTA_FW_UPGRADE_SFLASH_COPY
-    rc = sfi_write(write_to, data, len);
-#else
     rc = wiced_hal_sflash_write(write_to, len, data);
-
-#endif
-
     WICED_BT_TRACE("   complete\n");
     return rc;
 }
@@ -1017,8 +918,8 @@ wiced_bool_t wiced_bt_fw_read_meta_data(uint8_t partition, uint8_t *p_data, uint
         if (wiced_firmware_upgrade_retrieve_from_nv(0, buffer, IMAGE_META_DATA_PREFIX_LEN) == IMAGE_META_DATA_PREFIX_LEN)
         {
             STREAM_TO_UINT32(temp, p);
-            if (temp != 0xFFFFFFFF)
-                return WICED_FALSE;
+            //if (temp != 0xFFFFFFFF)
+            //    return WICED_FALSE;
             STREAM_TO_UINT32(temp, p);
             if (temp != IMAGE_META_DATA_ID)
                 return WICED_FALSE;

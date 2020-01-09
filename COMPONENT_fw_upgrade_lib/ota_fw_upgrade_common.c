@@ -1,5 +1,5 @@
 /*
- * Copyright 2019, Cypress Semiconductor Corporation or a subsidiary of
+ * Copyright 2020, Cypress Semiconductor Corporation or a subsidiary of
  * Cypress Semiconductor Corporation. All Rights Reserved.
  *
  * This software, including source code, documentation and related
@@ -47,7 +47,9 @@
 #include "ota_fw_upgrade.h"
 #include "sha256.h"
 #include "p_256_multprecision.h"
+#ifndef CYW20706A2
 #include "wiced_hal_eflash.h"
+#endif
 #ifdef ENABLE_SFLASH_UPGRADE
 #include "wiced_hal_sflash.h"
 #endif
@@ -126,7 +128,6 @@ void ota_fw_upgrade_init_data(wiced_ota_firmware_upgrade_status_callback_t *p_st
     ota_fw_upgrade_initialized           = WICED_TRUE;
     ota_fw_upgrade_state.state           = OTA_STATE_IDLE;
     ota_fw_upgrade_state.indication_sent = WICED_FALSE;
-    ota_fw_upgrade_state.fw_verified     = WICED_FALSE;
 
 #if defined(OTA_FW_UPGRADE_SFLASH_COPY) || defined(OTA_FW_UPGRADE_EFLASH_COPY)
     {
@@ -157,7 +158,12 @@ void wiced_ota_fw_upgrade_connection_status_event(wiced_bt_gatt_connection_statu
     ota_fw_upgrade_state.state = OTA_STATE_IDLE;
     if (p_status->connected)
     {
+        ota_fw_upgrade_state.conn_id = p_status->conn_id;
         memcpy(ota_fw_upgrade_state.bdaddr, p_status->bd_addr, BD_ADDR_LEN);
+    }
+    else
+    {
+        ota_fw_upgrade_state.conn_id = 0;
     }
 }
 
@@ -369,7 +375,7 @@ int32_t ota_fw_upgrade_calculate_checksum( int32_t offset, int32_t length )
         // read should be on the word boundary and in full words, we may read a bit more, but
         // include correct number of bytes in the CRC calculation
         wiced_firmware_upgrade_retrieve_from_nv(offset, memory_chunk, (bytes_to_read + 3) & 0xFFFFFFFC);
-#if OTA_CHIP == 20703
+#if (OTA_CHIP == 20703) || (defined(CYW20706A2))
         crc32 = update_crc(crc32, memory_chunk, bytes_to_read);
 #else
 #if (defined(CYW20719B2) || defined(CYW20721B2) || defined(CYW20719B2) || defined(CYW20735B1) || defined(CYW20819A1))

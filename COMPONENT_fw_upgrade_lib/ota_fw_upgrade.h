@@ -12,26 +12,14 @@
 
 #define OTA_UPGRADE_DEBUG 1
 
-#if ( defined(CYW20719B0) || defined(CYW20719B1) || defined(CYW20721B1) || defined(CYW20721B2) || defined(CYW20735B0) || defined(CYW20735B1) || defined (CYW20819A1) )
-#define OTA_FW_UPGRADE_READ_CHUNK                   128
-#else
 #define OTA_FW_UPGRADE_READ_CHUNK                   512
-#endif
-
 #define OTA_SEC_FW_UPGRADE_READ_CHUNK               1024
-
-#if ( defined(CYW20735B0) || defined(CYW20735B1) )
-#define OTA_FW_UPGRADE_CHUNK_SIZE_TO_COMMIT         128
-#else
 #define OTA_FW_UPGRADE_CHUNK_SIZE_TO_COMMIT         512
-#endif
 
 #define KEY_LENGTH_BITS             256
 #define KEY_LENGTH_BYTES            (KEY_LENGTH_BITS / 8)
 #define SIGNATURE_LEN               (KEY_LENGTH_BYTES * 2)
 #define DS_IMAGE_PREFIX_LEN         16
-
-#define OTA_FWID_LENGTH                             8
 
 typedef struct
 {
@@ -45,6 +33,7 @@ typedef struct
     int32_t         state;
     uint8_t         bdaddr[6];               // BDADDR of connected device
     uint16_t        client_configuration;    // characteristic client configuration descriptor
+    uint16_t        conn_id;                 // none zero connection id when connected
     uint8_t         status;                  // Current status
     uint16_t        current_offset;          // Offset in the image to store the data
     int32_t         total_len;               // Total length expected from the host
@@ -58,9 +47,8 @@ typedef struct
     wiced_timer_t   reset_timer;
     uint8_t         read_buffer[OTA_FW_UPGRADE_CHUNK_SIZE_TO_COMMIT];
 
-    uint16_t        fw_cid;
-    uint8_t         fw_id[OTA_FWID_LENGTH];
-    wiced_bool_t    fw_verified;
+    wiced_bool_t    transfer_only;          // Transfer only, no saving to flash
+    wiced_ota_firmware_event_callback_t *p_event_callback;
 } ota_fw_upgrade_state_t;
 
 extern const uint8_t                                          ds_image_prefix[8];

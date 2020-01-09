@@ -1,5 +1,5 @@
 /*
- * Copyright 2019, Cypress Semiconductor Corporation or a subsidiary of
+ * Copyright 2020, Cypress Semiconductor Corporation or a subsidiary of
  * Cypress Semiconductor Corporation. All Rights Reserved.
  *
  * This software, including source code, documentation and related
@@ -158,7 +158,7 @@ void wiced_firmware_update_copy_sflash()
 
 #if !defined(OTA_FW_UPGRADE_EFLASH_COPY)
    // set up sflash via spi2
-    wiced_ofu_sflash_init();
+    wiced_ofu_sflash_init(WICED_OFU_DEFAULT_SPI_CLK);
 #endif
 
     do

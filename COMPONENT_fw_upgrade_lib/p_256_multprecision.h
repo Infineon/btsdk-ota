@@ -1,5 +1,5 @@
 /*
- * Copyright 2019, Cypress Semiconductor Corporation or a subsidiary of
+ * Copyright 2020, Cypress Semiconductor Corporation or a subsidiary of
  * Cypress Semiconductor Corporation. All Rights Reserved.
  *
  * This software, including source code, documentation and related
@@ -41,7 +41,11 @@
 #ifndef P_256_MULTPRECISION_H
 #define P_256_MULTPRECISION_H
 
+#ifdef CYW20706A2
+#include "data_types.h"
+#else
 #include "p_256_types.h"
+#endif
 
 /* Type definitions */
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2019, Cypress Semiconductor Corporation or a subsidiary of
+ * Copyright 2020, Cypress Semiconductor Corporation or a subsidiary of
  * Cypress Semiconductor Corporation. All Rights Reserved.
  *
  * This software, including source code, documentation and related
@@ -535,7 +535,7 @@ uint32_t wiced_bt_get_fw_image_size(uint8_t partition)
     uint8_t data[16];
     uint32_t image_size = 0;
     uint32_t offset = PARTITION_ACTIVE ? g_fw_upgrade.active_ds_location : g_fw_upgrade.upgrade_ds_location;
-    if (wiced_hal_eflash_read(offset, data, 16) == WICED_SUCCESS)
+    if (wiced_hal_eflash_read(offset - EF_BASE_ADDR, data, 16) == WICED_SUCCESS)
     {
         image_size = data[12] + (data[13] << 8) + (data[14] << 16) + (data[15] << 24);
         WICED_BT_TRACE("image size:%d offset:%08x\n", image_size, offset);
@@ -549,6 +549,14 @@ uint32_t wiced_bt_get_fw_image_size(uint8_t partition)
 
 void wiced_bt_get_fw_image_chunk(uint8_t partition, uint32_t offset, uint8_t *p_data, uint16_t data_len)
 {
+    if (partition == PARTITION_ACTIVE)
+    {
+        wiced_hal_eflash_read(g_config_Info.active_ds_base - EF_BASE_ADDR + offset, p_data, (data_len + 3) & 0xFFFFFFFC);
+    }
+    else if (partition == PARTITION_UPGRADE)
+    {
+        wiced_firmware_upgrade_retrieve_from_nv(offset, p_data, (data_len + 3) & 0xFFFFFFFC);
+    }
 }
 
 /*
@@ -624,8 +632,8 @@ wiced_bool_t wiced_bt_fw_read_meta_data(uint8_t partition, uint8_t *p_data, uint
         if (wiced_firmware_upgrade_retrieve_from_nv(0, buffer, IMAGE_META_DATA_PREFIX_LEN) == IMAGE_META_DATA_PREFIX_LEN)
         {
             STREAM_TO_UINT32(temp, p);
-            if (temp != 0xFFFFFFFF)
-                return WICED_FALSE;
+            //if (temp != 0xFFFFFFFF)
+            //    return WICED_FALSE;
             STREAM_TO_UINT32(temp, p);
             if (temp != IMAGE_META_DATA_ID)
                 return WICED_FALSE;
