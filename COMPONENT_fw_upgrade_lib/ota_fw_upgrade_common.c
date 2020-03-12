@@ -128,15 +128,6 @@ void ota_fw_upgrade_init_data(wiced_ota_firmware_upgrade_status_callback_t *p_st
     ota_fw_upgrade_initialized           = WICED_TRUE;
     ota_fw_upgrade_state.state           = OTA_STATE_IDLE;
     ota_fw_upgrade_state.indication_sent = WICED_FALSE;
-
-#if defined(OTA_FW_UPGRADE_SFLASH_COPY) || defined(OTA_FW_UPGRADE_EFLASH_COPY)
-    {
-        // this call is added to force the inclusion of code from fw_update_copy_sflash.c
-        // as the linker can't be otherwise persuaded
-        void init_wiced_firmware_update_copy_sflash(void);
-        init_wiced_firmware_update_copy_sflash();
-    }
-#endif
 }
 
 /*
@@ -291,10 +282,15 @@ int32_t ota_sec_fw_upgrade_verify(void)
 {
     mbedtls_sha256_context sha2_ctx;
     uint32_t     offset;
-    uint32_t     nvram_len = ota_fw_upgrade_state.total_len - SIGNATURE_LEN;
+    uint32_t     nvram_len = ota_fw_upgrade_state.total_len;
     uint8_t      hash[32];
     uint8_t      signature[SIGNATURE_LEN + 4];
     uint8_t      res;
+
+#if !defined(OTA_ENCRYPT_SFLASH_DATA)
+    nvram_len -= SIGNATURE_LEN;
+#endif
+    memset(signature, 0, SIGNATURE_LEN + 4);
 
     mbedtls_sha256_init(&sha2_ctx);
     // initialize sha256 context
@@ -305,14 +301,42 @@ int32_t ota_sec_fw_upgrade_verify(void)
         uint8_t memory_chunk[OTA_SEC_FW_UPGRADE_READ_CHUNK];
         int32_t bytes_to_read = ((offset + OTA_SEC_FW_UPGRADE_READ_CHUNK) < nvram_len) ? OTA_SEC_FW_UPGRADE_READ_CHUNK : nvram_len - offset;
 
+#if !defined(OTA_ENCRYPT_SFLASH_DATA)
         // read should be on in full words, we may read a bit more, but include correct number of bytes in the hash calculation
         if (wiced_firmware_upgrade_retrieve_from_nv(offset, memory_chunk, (bytes_to_read + 3) & 0xFFFFFFFC) != ((bytes_to_read + 3) & 0xFFFFFFFC))
         {
-            WICED_BT_TRACE("failed to read loc0:%x\n", offset);
+            WICED_BT_TRACE("failed to read loc0:%x, %d bytes\n", offset, bytes_to_read);
         }
-
         // dump_hex(memory_chunk, bytes_to_read);
         mbedtls_sha256_update_ret(&sha2_ctx, memory_chunk, bytes_to_read);
+#else
+        // if using external encrypted image, we need to read in the same
+        // pattern as when writing the encrypted stream
+        if (wiced_firmware_upgrade_retrieve_from_nv(offset, memory_chunk, (bytes_to_read + 3) & 0xFFFFFFFC) != ((bytes_to_read + 3) & 0xFFFFFFFC))
+        {
+            WICED_BT_TRACE("failed to read loc0:%x, %d bytes\n", offset, bytes_to_read);
+        }
+        else if((offset+bytes_to_read) >= (nvram_len - SIGNATURE_LEN))
+        {
+            // tricky if signature is divided between last 2 memory_chunks
+            uint32_t i, last_bytes_to_read = 0;
+            for(i=offset; i < (offset+bytes_to_read); i++)
+            {
+                if(i >= (nvram_len - SIGNATURE_LEN))
+                {
+                    signature[i - (nvram_len - SIGNATURE_LEN)] = memory_chunk[i-offset];
+                }
+                else
+                {
+                    last_bytes_to_read++;
+                }
+            }
+            bytes_to_read = last_bytes_to_read;
+        }
+        // dump_hex(memory_chunk, bytes_to_read);
+        mbedtls_sha256_update_ret(&sha2_ctx, memory_chunk, bytes_to_read);
+#endif
+
     }
     mbedtls_sha256_finish_ret(&sha2_ctx, hash);
 
@@ -323,6 +347,7 @@ int32_t ota_sec_fw_upgrade_verify(void)
     WICED_BT_TRACE("public_key:%x\n", (uint8_t *)p_ecdsa_public_key);
     dump_hex((uint8_t *)p_ecdsa_public_key, sizeof(Point));
 #endif
+#if !defined(OTA_ENCRYPT_SFLASH_DATA)
     // read should be on the word boundary and in full words. Need to adjust offset to full words and read a bit more.
     offset = ota_fw_upgrade_state.total_len - SIGNATURE_LEN;
     if (wiced_firmware_upgrade_retrieve_from_nv(offset -  (offset & 0x03), signature, SIGNATURE_LEN + 4) != SIGNATURE_LEN + 4)
@@ -330,12 +355,23 @@ int32_t ota_sec_fw_upgrade_verify(void)
         WICED_BT_TRACE("failed to read loc1:%x\n", offset -  (offset & 0x03));
     }
 
-#ifdef OTA_UPGRADE_DEBUG
+  #ifdef OTA_UPGRADE_DEBUG
     WICED_BT_TRACE("signature:\n");
     dump_hex(signature + (offset & 0x03), SIGNATURE_LEN);
-#endif
+  #endif
 
     res = ecdsa_verify_(hash, signature + (offset & 0x03), p_ecdsa_public_key);
+
+#else
+    // already got signature from read-back loop
+  #ifdef OTA_UPGRADE_DEBUG
+    WICED_BT_TRACE("signature:\n");
+    dump_hex(signature, SIGNATURE_LEN);
+  #endif
+
+    res = ecdsa_verify_(hash, signature, p_ecdsa_public_key);
+#endif
+
 #ifdef OTA_UPGRADE_DEBUG
     WICED_BT_TRACE("ecdsa_verify_:%d", res);
 #endif

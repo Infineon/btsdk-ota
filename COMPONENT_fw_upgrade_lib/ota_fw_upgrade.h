@@ -13,8 +13,13 @@
 #define OTA_UPGRADE_DEBUG 1
 
 #define OTA_FW_UPGRADE_READ_CHUNK                   512
-#define OTA_SEC_FW_UPGRADE_READ_CHUNK               1024
 #define OTA_FW_UPGRADE_CHUNK_SIZE_TO_COMMIT         512
+#ifdef OTA_ENCRYPT_SFLASH_DATA
+//block sizes must match for AES-CTR
+#define OTA_SEC_FW_UPGRADE_READ_CHUNK               OTA_FW_UPGRADE_CHUNK_SIZE_TO_COMMIT
+#else
+#define OTA_SEC_FW_UPGRADE_READ_CHUNK               1024
+#endif
 
 #define KEY_LENGTH_BITS             256
 #define KEY_LENGTH_BYTES            (KEY_LENGTH_BITS / 8)

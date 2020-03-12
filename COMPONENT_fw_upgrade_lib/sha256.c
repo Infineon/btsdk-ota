@@ -264,10 +264,10 @@ int mbedtls_internal_sha256_process( mbedtls_sha256_context *ctx,
 }
 
 #if !defined(MBEDTLS_DEPRECATED_REMOVED)
-void mbedtls_sha256_process( mbedtls_sha256_context *ctx,
+int mbedtls_sha256_process( mbedtls_sha256_context *ctx,
                              const unsigned char data[64] )
 {
-    mbedtls_internal_sha256_process( ctx, data );
+    return mbedtls_internal_sha256_process( ctx, data );
 }
 #endif
 #endif /* !MBEDTLS_SHA256_PROCESS_ALT */

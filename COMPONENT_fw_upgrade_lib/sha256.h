@@ -218,7 +218,7 @@ MBEDTLS_DEPRECATED void mbedtls_sha256_finish( mbedtls_sha256_context *ctx,
  * \param data     The buffer holding one block of data. This must be
  *                 a readable buffer of size \c 64 Bytes.
  */
-MBEDTLS_DEPRECATED void mbedtls_sha256_process( mbedtls_sha256_context *ctx,
+MBEDTLS_DEPRECATED int mbedtls_sha256_process( mbedtls_sha256_context *ctx,
                                                 const unsigned char data[64] );
 
 #undef MBEDTLS_DEPRECATED

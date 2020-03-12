@@ -616,7 +616,7 @@ wiced_bool_t wiced_bt_fw_read_meta_data(uint8_t partition, uint8_t *p_data, uint
     uint8_t buffer[IMAGE_META_DATA_PREFIX_LEN];
     uint8_t *p = buffer;
     uint32_t temp;
-    uint32_t data_len;
+    uint32_t data_len, read_len;
     wiced_bool_t got_data = WICED_FALSE;
 
     if (p_data == NULL || p_len == NULL)
@@ -636,7 +636,8 @@ wiced_bool_t wiced_bt_fw_read_meta_data(uint8_t partition, uint8_t *p_data, uint
             if (data_len > *p_len)
                 return WICED_FALSE;
 
-            if (wiced_firmware_upgrade_retrieve_from_nv(IMAGE_META_DATA_PREFIX_LEN, p_data, data_len) == data_len)
+            read_len = (data_len + 3) & 0xFFFFFFFC;
+            if (wiced_firmware_upgrade_retrieve_from_nv(IMAGE_META_DATA_PREFIX_LEN, p_data, read_len) == read_len)
             {
                 *p_len = data_len;
                 got_data = WICED_TRUE;

@@ -76,6 +76,8 @@ COMPONENT=
 CY_APP_PATH=.
 
 CY_SHARED_PATH=$(CY_APP_PATH)/../../..
+# absolute path to the root of the BTSDK
+CY_SHARED_PATH_ABS=$(CURDIR)/../../..
 
 # Path (absolute or relative) to the base library
 CY_BASELIB_PATH=$(CY_SHARED_PATH)/dev-kit/baselib/$(CY_TARGET_DEVICE)
@@ -125,4 +127,6 @@ include $(CY_TOOLS_DIR)/make/start.mk
 ifeq ($(CY_TARGET_DEVICE)$(TARGET),)
 all:
 	@echo This is not a buildable application project - \"make $@\" : Success
+else
+-include internal.mk
 endif

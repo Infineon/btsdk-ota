@@ -311,6 +311,9 @@ UINT8 first_256_byte_dump[256];
 #ifdef OTA_ENCRYPT_SFLASH_DATA
 void *secure;
 uint32_t ofu_secure_size = 0;
+uint32_t encryption_incremental_offset = 0;
+//#define OFU_CRYPT_TYPE OFU_CRYPT_TYPE_AES_CFB128
+#define OFU_CRYPT_TYPE OFU_CRYPT_TYPE_AES_CTR
 #endif
 
 
@@ -366,8 +369,6 @@ wiced_bool_t wiced_firmware_upgrade_init(wiced_fw_upgrade_nv_loc_len_t *p_sflash
         WICED_BT_TRACE("could not allocate secure context size %d\n", ofu_secure_size);
         return WICED_FALSE;
     }
-    wiced_ofu_new_external_storage_key(WICED_TRUE, OFU_CRYPT_TYPE_AES_CFB128, secure);
-    wiced_ofu_store_external_storage_key(secure);
 #endif
 
 #ifndef OTA_FW_UPGRADE_SFLASH_COPY
@@ -459,10 +460,12 @@ wiced_bool_t wiced_firmware_upgrade_erase_nv(uint32_t start, uint32_t size)
 
     if (g_fw_upgrade.upgrade_type == FW_UPDATE_INTF_EFLASH)
     {
+        wiced_ofu_enter_eflash_write_or_erase();
         for (offset = 0; offset < size; offset += EF_PAGE_SIZE)
         {
             wiced_hal_eflash_erase(start + offset + g_fw_upgrade.upgrade_ds_location - EF_BASE_ADDR, EF_PAGE_SIZE);
         }
+        wiced_ofu_leave_eflash_write_or_erase();
     }
 #ifdef ENABLE_SFLASH_UPGRADE
     else if (g_fw_upgrade.upgrade_type == FW_UPDATE_INTF_SFLASH)
@@ -500,7 +503,9 @@ uint32_t wiced_firmware_upgrade_store_to_nv(uint32_t offset, uint8_t *data, uint
         // if this is a beginning of a new sector erase first.
         if ((offset % EF_PAGE_SIZE) == 0 && !fw_upgrade_is_sector_erased(offset))
         {
+            wiced_ofu_enter_eflash_write_or_erase();
             wiced_hal_eflash_erase(offset + g_fw_upgrade.upgrade_ds_location - EF_BASE_ADDR, EF_PAGE_SIZE);
+            wiced_ofu_leave_eflash_write_or_erase();
         }
         // reserve first 4 bytes of download to commit when complete, in case of unexpected power loss
         // boot rom checks this signature to validate DS
@@ -519,32 +524,73 @@ uint32_t wiced_firmware_upgrade_store_to_nv(uint32_t offset, uint8_t *data, uint
         offset += (g_fw_upgrade.upgrade_ds_location - EF_BASE_ADDR);
 
         //WICED_BT_TRACE("write: offset:%x len:%d\n", offset, len);
+        wiced_ofu_enter_eflash_write_or_erase();
         if (wiced_hal_eflash_write(offset, data, len) == WICED_SUCCESS)
         {
             g_fw_upgrade.upgrade_bytes_written += len;
-            return len;
         }
         else
         {
             WICED_BT_TRACE("write: failed offset:%x len:%d\n", offset, len);
-            return 0;
+            len = 0;
         }
+        wiced_ofu_leave_eflash_write_or_erase();
+        return len;
     }
 
 #ifdef ENABLE_SFLASH_UPGRADE
     else if (g_fw_upgrade.upgrade_type == FW_UPDATE_INTF_SFLASH)
     {
         uint32_t written;
+        uint32_t erase_start, erase_end;
         // The real offset into the NV is the current offset + the upgrade DS location.
         offset += g_fw_upgrade.upgrade_ds_location;
 
+        // we could be restarting a new write after abort, so set up new key here
+#ifdef OTA_ENCRYPT_SFLASH_DATA
+        if(offset == g_fw_upgrade.upgrade_ds_location)
+        {
+            wiced_ofu_new_external_storage_key(WICED_TRUE, OFU_CRYPT_TYPE, secure);
+            wiced_ofu_store_external_storage_key(secure);
+            encryption_incremental_offset = 0;
+        }
+        // if this is a beginning of a new sector erase first.
+        // if this will cross to a new sector, erase
+        erase_start = offset + encryption_incremental_offset;
+        erase_end = erase_start + len + 8;
+        // if data write will start at a sector boundary
+        if ((erase_start % WICED_FW_UPGRADE_SF_SECTOR_SIZE) == 0 && !fw_upgrade_is_sector_erased(erase_start))
+        {
+            fw_upgrade_erase_sector(erase_start);
+        }
+        else
+        {
+            // round up to next sector boundary
+            erase_start = (erase_start + WICED_FW_UPGRADE_SF_SECTOR_SIZE) &
+                                                ~(WICED_FW_UPGRADE_SF_SECTOR_SIZE - 1);
+            // if write will cross next sector, erase it
+            // assume a write never is more than one sector
+            if(erase_start < erase_end)
+            {
+                fw_upgrade_erase_sector(erase_start);
+            }
+        }
+        // if using OFU_CRYPT_TYPE=OFU_CRYPT_TYPE_AES_CTR, offset and len go between blocks
+        #if OFU_CRYPT_TYPE == OFU_CRYPT_TYPE_AES_CTR
+        fw_upgrade_write_mem(offset + encryption_incremental_offset, (uint8_t *)&offset, 4);
+        fw_upgrade_write_mem(offset + encryption_incremental_offset + 4, (uint8_t *)&len, 4);
+        encryption_incremental_offset += 8;
+        #endif
+        wiced_ofu_crypt(WICED_TRUE, offset, len, data, data, secure);
+        #if OFU_CRYPT_TYPE == OFU_CRYPT_TYPE_AES_CTR
+        offset += encryption_incremental_offset;
+        #endif
+#else
         // if this is a beginning of a new sector erase first.
         if ((offset % WICED_FW_UPGRADE_SF_SECTOR_SIZE) == 0 && !fw_upgrade_is_sector_erased(offset))
         {
             fw_upgrade_erase_sector(offset);
         }
-#ifdef OTA_ENCRYPT_SFLASH_DATA
-        wiced_ofu_crypt(WICED_TRUE, len, data, data, secure);
 #endif
         written = fw_upgrade_write_mem(offset, data, len);
         g_fw_upgrade.upgrade_bytes_written += written;
@@ -592,11 +638,17 @@ uint32_t wiced_firmware_upgrade_retrieve_from_nv(uint32_t offset, uint8_t *data,
         if(offset == g_fw_upgrade.upgrade_ds_location)
         {
             wiced_ofu_restore_external_storage_key(secure);
+            encryption_incremental_offset = 0;
         }
-        read = fw_upgrade_read_mem(offset, data, len);
+        #if OFU_CRYPT_TYPE == OFU_CRYPT_TYPE_AES_CTR
+        fw_upgrade_read_mem(offset + encryption_incremental_offset, (uint8_t *)&offset, 4);
+        fw_upgrade_read_mem(offset + encryption_incremental_offset + 4, (uint8_t *)&len, 4);
+        encryption_incremental_offset += 8;
+        #endif
+        read = fw_upgrade_read_mem(offset+encryption_incremental_offset, data, len);
         if(read > 0)
         {
-            wiced_ofu_crypt(WICED_FALSE, len, data, data, secure);
+            wiced_ofu_crypt(WICED_FALSE, offset, len, data, data, secure);
         }
 #else
         read = fw_upgrade_read_mem(offset, data, len);
@@ -690,28 +742,30 @@ uint8_t firmware_upgrade_switch_eflash_active_ds(void)
     uint32_t offset;
     uint8_t *ptr;
 
-	// invalidate DS1 so reboot runs DS2 sflash copy to DS1
-	WICED_BT_TRACE("firmware_upgrade_switch_eflash_active_ds\n");
-	ptr =  wiced_bt_get_buffer(EF_PAGE_SIZE);
-	if (ptr == NULL)
-	{
+    // invalidate DS1 so reboot runs DS2 sflash copy to DS1
+    WICED_BT_TRACE("firmware_upgrade_switch_eflash_active_ds\n");
+    ptr =  wiced_bt_get_buffer(EF_PAGE_SIZE);
+    if (ptr == NULL)
+    {
 #if ENABLE_WICED_FW_DEBUG
-		WICED_BT_TRACE(" fw upgrade fail!! No resources to switch to upgraded firmware \n");
+        WICED_BT_TRACE(" fw upgrade fail!! No resources to switch to upgraded firmware \n");
 #endif
-		return 0;
-	}
+        return 0;
+    }
     // 819 onchip flash allows only page writes, so read the page and update first 4 bytes with signature.
-	offset = g_fw_upgrade.active_ds_location - EF_BASE_ADDR;
-	WICED_BT_TRACE("reading active DS1 signature from %06x\n", offset);
-	wiced_hal_eflash_read(offset, ptr, EF_PAGE_SIZE);
+    offset = g_fw_upgrade.active_ds_location - EF_BASE_ADDR;
+    WICED_BT_TRACE("reading active DS1 signature from %06x\n", offset);
+    wiced_hal_eflash_read(offset, ptr, EF_PAGE_SIZE);
 
-	// store actual number of bytes written for ds2 copy app
-	memcpy(ptr, (uint8_t *)&g_fw_upgrade.upgrade_bytes_written, sizeof(g_fw_upgrade.upgrade_bytes_written));
+    // store actual number of bytes written for ds2 copy app
+    memcpy(ptr, (uint8_t *)&g_fw_upgrade.upgrade_bytes_written, sizeof(g_fw_upgrade.upgrade_bytes_written));
 
-	// write the whole page now with invalid signature; this will cause reboot to DS2
-	WICED_BT_TRACE("writing to invalidate DS1 signature, upgrade image length %06x\n", offset);
-	wiced_hal_eflash_erase(offset, EF_PAGE_SIZE);
-	wiced_hal_eflash_write(offset, ptr, EF_PAGE_SIZE);
+    // write the whole page now with invalid signature; this will cause reboot to DS2
+    WICED_BT_TRACE("writing to invalidate DS1 signature, upgrade image length %06x\n", offset);
+    wiced_ofu_enter_eflash_write_or_erase();
+    wiced_hal_eflash_erase(offset, EF_PAGE_SIZE);
+    wiced_hal_eflash_write(offset, ptr, EF_PAGE_SIZE);
+    wiced_ofu_leave_eflash_write_or_erase();
 #else
     wiced_result_t result;
     uint32_t signature = 0;
@@ -739,8 +793,10 @@ uint8_t firmware_upgrade_switch_eflash_active_ds(void)
     signature = g_fw_upgrade.upgrade_ds_signature;
 
     // write the whole page now with signature
+    wiced_ofu_enter_eflash_write_or_erase();
     wiced_hal_eflash_erase(g_fw_upgrade.upgrade_ds_location - EF_BASE_ADDR, EF_PAGE_SIZE);
     wiced_hal_eflash_write(g_fw_upgrade.upgrade_ds_location - EF_BASE_ADDR, ptr, EF_PAGE_SIZE);
+    wiced_ofu_leave_eflash_write_or_erase();
 
     // check that the write completed
     memset(ptr, 0, EF_PAGE_SIZE);
@@ -757,7 +813,9 @@ uint8_t firmware_upgrade_switch_eflash_active_ds(void)
     wiced_bt_free_buffer(ptr);
 
     // clear first active DS sector in eflash, so that on next boot, CRC check will fail and ROM code boots from upgraded DS
+    wiced_ofu_enter_eflash_write_or_erase();
     result = wiced_hal_eflash_erase(g_fw_upgrade.active_ds_location - EF_BASE_ADDR, EF_PAGE_SIZE);
+    wiced_ofu_leave_eflash_write_or_erase();
     //WICED_BT_TRACE("active DS first sector erase result:%d active_ds:%x\n", result, g_config_Info.active_ds_base - EF_BASE_ADDR);
     UNUSED_VARIABLE(result);
 #endif
@@ -793,8 +851,10 @@ uint8_t firmware_upgrade_switch_sflash_active_ds(void)
 
     // write the whole page now with bad signature; this will cause reboot to DS2
     WICED_BT_TRACE("writing to invalidate DS1 signature\n");
+    wiced_ofu_enter_eflash_write_or_erase();
     wiced_hal_eflash_erase(g_fw_upgrade.active_ds_location - EF_BASE_ADDR, EF_PAGE_SIZE);
     wiced_hal_eflash_write(g_fw_upgrade.active_ds_location - EF_BASE_ADDR, ptr, EF_PAGE_SIZE);
+    wiced_ofu_leave_eflash_write_or_erase();
     return 1;
 }
 
@@ -854,20 +914,23 @@ uint32_t wiced_bt_get_fw_image_size(uint8_t partition)
 
 void wiced_bt_get_fw_image_chunk(uint8_t partition, uint32_t offset, uint8_t *p_data, uint16_t data_len)
 {
-    uint32_t base_offset = (partition == PARTITION_UPGRADE) ? g_fw_upgrade.upgrade_ds_location : g_fw_upgrade.active_ds_location;
-    if(g_fw_upgrade.upgrade_type == FW_UPDATE_INTF_EFLASH)
+    if (partition == PARTITION_ACTIVE)
     {
-        offset += base_offset;
-        wiced_hal_eflash_read(offset - EF_BASE_ADDR, p_data, data_len);
-    }
+        if(g_fw_upgrade.upgrade_type == FW_UPDATE_INTF_EFLASH)
+        {
+            wiced_hal_eflash_read(g_config_Info.active_ds_base + offset - EF_BASE_ADDR, p_data, data_len);
+        }
 #ifdef ENABLE_SFLASH_UPGRADE
-    else if (g_fw_upgrade.upgrade_type == FW_UPDATE_INTF_SFLASH)
-    {
-        // The real offset into the NV is the current offset + the upgrade DS location.
-        offset += base_offset;
-        fw_upgrade_read_mem(offset, p_data, data_len);
-    }
+        else if (g_fw_upgrade.upgrade_type == FW_UPDATE_INTF_SFLASH)
+        {
+            fw_upgrade_read_mem(g_config_Info.active_ds_base + offset, p_data, data_len);
+        }
 #endif
+    }
+    else if (partition == PARTITION_UPGRADE)
+    {
+        wiced_firmware_upgrade_retrieve_from_nv(offset, p_data, (data_len + 3) & 0xFFFFFFFC);
+    }
 }
 
 #define IMAGE_META_DATA_PREFIX_LEN      12
