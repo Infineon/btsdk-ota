@@ -55,6 +55,7 @@
 #ifdef ENABLE_SFLASH_UPGRADE
 #include "wiced_hal_sflash.h"
 #endif
+#include "ota_fw_upgrade.h"
 #include "ofu_ds2.h"
 #include "clock_timer.h"
 
@@ -309,11 +310,24 @@ UINT8 first_256_byte_dump[256];
 #endif
 
 #ifdef OTA_ENCRYPT_SFLASH_DATA
-void *secure;
-uint32_t ofu_secure_size = 0;
-uint32_t encryption_incremental_offset = 0;
-//#define OFU_CRYPT_TYPE OFU_CRYPT_TYPE_AES_CFB128
-#define OFU_CRYPT_TYPE OFU_CRYPT_TYPE_AES_CTR
+    void *secure = NULL;
+    uint32_t ofu_secure_size = 0;
+    uint32_t next_aes_ctr_block_storage = 0;
+    //#define OFU_CRYPT_TYPE OFU_CRYPT_TYPE_AES_CFB128
+    #define OFU_CRYPT_TYPE OFU_CRYPT_TYPE_AES_CTR
+    #if (OFU_CRYPT_TYPE == OFU_CRYPT_TYPE_AES_CTR)
+        typedef struct
+        {
+            uint32_t flash_offset;
+            uint32_t image_offset; /* keep this next to length, read together from flash */
+            uint16_t length;
+        } AES_CTR_BLOCK_ITEM;
+        // a buffer to hold decrypted block data during reads
+        uint8_t *aes_ctr_block_buffer;
+        #define MAX_AES_CTR_BLOCKS ((DS2_LOCATION-DS_LOCATION)/OTA_FW_UPGRADE_READ_CHUNK)
+        // there are about 500 max items in list, 12 bytes per node
+        AES_CTR_BLOCK_ITEM aes_ctr_block_pool[MAX_AES_CTR_BLOCKS];
+    #endif
 #endif
 
 
@@ -362,13 +376,29 @@ wiced_bool_t wiced_firmware_upgrade_init(wiced_fw_upgrade_nv_loc_len_t *p_sflash
 #endif
 
 #ifdef OTA_ENCRYPT_SFLASH_DATA
-    ofu_secure_size = wiced_ofu_get_external_storage_context_size();
-    secure = (void *)  wiced_bt_get_buffer(ofu_secure_size);
     if(NULL == secure)
     {
-        WICED_BT_TRACE("could not allocate secure context size %d\n", ofu_secure_size);
-        return WICED_FALSE;
+        ofu_secure_size = wiced_ofu_get_external_storage_context_size();
+        secure = (void *)  wiced_bt_get_buffer(ofu_secure_size);
+        if(NULL == secure)
+        {
+            WICED_BT_TRACE("could not allocate secure context size %d\n", ofu_secure_size);
+            return WICED_FALSE;
+        }
     }
+    #if (OFU_CRYPT_TYPE == OFU_CRYPT_TYPE_AES_CTR)
+    // use aes_ctr_block_buffer for temporary storage for block read and decryption
+    // should be large enough for largest aes_ctr block written
+    if(NULL == aes_ctr_block_buffer)
+    {
+        aes_ctr_block_buffer = (uint8_t *)wiced_memory_permanent_allocate(WICED_FW_UPGRADE_SF_SECTOR_SIZE);
+        if(NULL == aes_ctr_block_buffer)
+        {
+            WICED_BT_TRACE("could not allocate aes_ctr_block_buffer\n");
+            return WICED_FALSE;
+        }
+    }
+    #endif
 #endif
 
 #ifndef OTA_FW_UPGRADE_SFLASH_COPY
@@ -495,6 +525,145 @@ wiced_bool_t fw_upgrade_is_sector_erased(uint32_t offset)
     return WICED_TRUE;
 }
 
+#ifdef OTA_ENCRYPT_SFLASH_DATA
+#if OFU_CRYPT_TYPE == OFU_CRYPT_TYPE_AES_CTR
+
+uint32_t fw_upgrade_aes_ctr_prepare_block_write(uint32_t offset, uint32_t len)
+{
+    uint32_t erase_start, erase_end;
+    uint32_t buffer[2] = {offset, len};
+
+    // if this is a beginning of a new sector erase first.
+    // if this will cross to a new sector, erase
+    erase_start = next_aes_ctr_block_storage;
+    erase_end = erase_start + len + 8;
+    // if data write will start at a sector boundary
+    if ((erase_start % WICED_FW_UPGRADE_SF_SECTOR_SIZE) == 0 && !fw_upgrade_is_sector_erased(erase_start))
+    {
+        fw_upgrade_erase_sector(erase_start);
+    }
+    else
+    {
+        // round up to next sector boundary
+        erase_start = (erase_start + WICED_FW_UPGRADE_SF_SECTOR_SIZE) &
+                                            ~(WICED_FW_UPGRADE_SF_SECTOR_SIZE - 1);
+        // if write will cross next sector, erase it
+        // assume a write never is more than one sector
+        if(erase_start < erase_end)
+        {
+            fw_upgrade_erase_sector(erase_start);
+        }
+    }
+    // if using OFU_CRYPT_TYPE=OFU_CRYPT_TYPE_AES_CTR, offset and len go between blocks
+    #if OFU_CRYPT_TYPE == OFU_CRYPT_TYPE_AES_CTR
+    if(8 == fw_upgrade_write_mem(next_aes_ctr_block_storage, (uint8_t *)&buffer, 8))
+    {
+        next_aes_ctr_block_storage += 8;
+        offset = next_aes_ctr_block_storage;
+        next_aes_ctr_block_storage += len;
+    }
+    else
+    {
+        offset = 0;
+    }
+    #endif
+    return offset;
+}
+
+uint32_t fw_upgrade_scan_aes_ctr_blocks(uint32_t offset)
+{
+    uint32_t i;
+    AES_CTR_BLOCK_ITEM *aes_ctr_block;
+
+    memset(aes_ctr_block_pool, 0, sizeof(AES_CTR_BLOCK_ITEM) * MAX_AES_CTR_BLOCKS);
+    // encrypted blocks can be out of order
+    // read in blocks and add to list
+    for(i = 0; i < MAX_AES_CTR_BLOCKS; i++)
+    {
+        aes_ctr_block = &aes_ctr_block_pool[i];
+        // read image offset and block length
+        if(8 != wiced_hal_sflash_read(offset, 8, (uint8_t *)&aes_ctr_block->image_offset))
+        {
+            WICED_BT_TRACE("ERROR reading aes-ctr prefix from sflash\n");
+            break;
+        }
+        if( aes_ctr_block->image_offset > FLASH_SIZE)
+        {
+            WICED_BT_TRACE("stop sflash scan, aes-ctr prefix has invalid image offset\n");
+            break;
+        }
+        if( aes_ctr_block->length > WICED_FW_UPGRADE_SF_SECTOR_SIZE)
+        {
+            WICED_BT_TRACE("stop scan aes-ctr prefix has invalid length\n");
+            break;
+        }
+        offset += 8;
+        aes_ctr_block->flash_offset = offset;
+        offset += aes_ctr_block->length;
+    }
+    return i != 0;
+}
+
+AES_CTR_BLOCK_ITEM *fw_upgrade_find_aes_ctr_block_with_offset(uint32_t offset)
+{
+    AES_CTR_BLOCK_ITEM *aes_ctr_block;
+    uint32_t i;
+
+    for(i = 0; i < MAX_AES_CTR_BLOCKS; i++)
+    {
+        aes_ctr_block = &aes_ctr_block_pool[i];
+        if(aes_ctr_block->length == 0)
+        {
+            break;
+        }
+        // if we find a larger offset in list, remove from tail and put before it in list
+        if( (aes_ctr_block->image_offset <= offset) &&
+            ((aes_ctr_block->image_offset + aes_ctr_block->length) > offset))
+        {
+            return aes_ctr_block;
+        }
+    }
+    return NULL;
+}
+
+uint32_t fw_upgrade_aes_ctr_read_partial_blocks(uint32_t offset, uint8_t *data, uint32_t len)
+{
+    uint32_t buffer[2];
+    uint32_t length = 0, read, read_toss;
+    while(len > 0)
+    {
+        AES_CTR_BLOCK_ITEM *aes_ctr_block = fw_upgrade_find_aes_ctr_block_with_offset(offset);
+        if(aes_ctr_block == NULL)
+        {
+            break;
+        }
+        // data must be able to contain largest written block
+        // read whole block for decryption
+        read = fw_upgrade_read_mem(aes_ctr_block->flash_offset, aes_ctr_block_buffer, aes_ctr_block->length);
+        if(read != aes_ctr_block->length)
+        {
+            break;
+        }
+        if(!wiced_ofu_crypt(WICED_FALSE, aes_ctr_block->image_offset,
+                            aes_ctr_block->length, aes_ctr_block_buffer, aes_ctr_block_buffer, secure))
+        {
+            break;
+        }
+        // copy portion of decrypted buffer to data
+        read_toss = offset - aes_ctr_block->image_offset;
+        read = aes_ctr_block->length - read_toss;
+        read = (read > len) ? len : read;
+        memcpy(data, aes_ctr_block_buffer + read_toss, read);
+        len -= read;
+        length += read;
+        data += read;
+        offset += read;
+    }
+    return length;
+}
+#endif // #if OFU_CRYPT_TYPE == OFU_CRYPT_TYPE_AES_CTR
+#endif // #ifdef OTA_ENCRYPT_SFLASH_DATA
+
 // Stores to the physical NV storage medium. if success, return len, else returns 0
 uint32_t wiced_firmware_upgrade_store_to_nv(uint32_t offset, uint8_t *data, uint32_t len)
 {
@@ -542,49 +711,37 @@ uint32_t wiced_firmware_upgrade_store_to_nv(uint32_t offset, uint8_t *data, uint
     else if (g_fw_upgrade.upgrade_type == FW_UPDATE_INTF_SFLASH)
     {
         uint32_t written;
-        uint32_t erase_start, erase_end;
         // The real offset into the NV is the current offset + the upgrade DS location.
         offset += g_fw_upgrade.upgrade_ds_location;
 
-        // we could be restarting a new write after abort, so set up new key here
 #ifdef OTA_ENCRYPT_SFLASH_DATA
+        // we could be restarting a new write after abort, so set up new key here
+        // starting a write at upgrade_ds_location indicates a new key is needed
         if(offset == g_fw_upgrade.upgrade_ds_location)
         {
             wiced_ofu_new_external_storage_key(WICED_TRUE, OFU_CRYPT_TYPE, secure);
             wiced_ofu_store_external_storage_key(secure);
-            encryption_incremental_offset = 0;
+            next_aes_ctr_block_storage = 0;
         }
-        // if this is a beginning of a new sector erase first.
-        // if this will cross to a new sector, erase
-        erase_start = offset + encryption_incremental_offset;
-        erase_end = erase_start + len + 8;
-        // if data write will start at a sector boundary
-        if ((erase_start % WICED_FW_UPGRADE_SF_SECTOR_SIZE) == 0 && !fw_upgrade_is_sector_erased(erase_start))
+        if(!wiced_ofu_crypt(WICED_TRUE, offset, len, data, data, secure))
         {
-            fw_upgrade_erase_sector(erase_start);
+            WICED_BT_TRACE("!!! bad encryption\n");
+            return 0;
         }
-        else
-        {
-            // round up to next sector boundary
-            erase_start = (erase_start + WICED_FW_UPGRADE_SF_SECTOR_SIZE) &
-                                                ~(WICED_FW_UPGRADE_SF_SECTOR_SIZE - 1);
-            // if write will cross next sector, erase it
-            // assume a write never is more than one sector
-            if(erase_start < erase_end)
-            {
-                fw_upgrade_erase_sector(erase_start);
-            }
-        }
+    #if OFU_CRYPT_TYPE == OFU_CRYPT_TYPE_AES_CTR
         // if using OFU_CRYPT_TYPE=OFU_CRYPT_TYPE_AES_CTR, offset and len go between blocks
-        #if OFU_CRYPT_TYPE == OFU_CRYPT_TYPE_AES_CTR
-        fw_upgrade_write_mem(offset + encryption_incremental_offset, (uint8_t *)&offset, 4);
-        fw_upgrade_write_mem(offset + encryption_incremental_offset + 4, (uint8_t *)&len, 4);
-        encryption_incremental_offset += 8;
-        #endif
-        wiced_ofu_crypt(WICED_TRUE, offset, len, data, data, secure);
-        #if OFU_CRYPT_TYPE == OFU_CRYPT_TYPE_AES_CTR
-        offset += encryption_incremental_offset;
-        #endif
+        if(0 == (offset = fw_upgrade_aes_ctr_prepare_block_write(offset, len)))
+        {
+            WICED_BT_TRACE("!!! bad block prep\n");
+            return 0;
+        }
+    #else
+        // if this is a beginning of a new sector erase first.
+        if ((offset % WICED_FW_UPGRADE_SF_SECTOR_SIZE) == 0 && !fw_upgrade_is_sector_erased(offset))
+        {
+            fw_upgrade_erase_sector(offset);
+        }
+    #endif
 #else
         // if this is a beginning of a new sector erase first.
         if ((offset % WICED_FW_UPGRADE_SF_SECTOR_SIZE) == 0 && !fw_upgrade_is_sector_erased(offset))
@@ -631,25 +788,29 @@ uint32_t wiced_firmware_upgrade_retrieve_from_nv(uint32_t offset, uint8_t *data,
 #ifdef ENABLE_SFLASH_UPGRADE
     else if (g_fw_upgrade.upgrade_type == FW_UPDATE_INTF_SFLASH)
     {
-        uint32_t read;
+        uint32_t read = 0;
         // The real offset into the NV is the current offset + the upgrade DS location.
         offset += g_fw_upgrade.upgrade_ds_location;
 #ifdef OTA_ENCRYPT_SFLASH_DATA
+        // starting a read at upgrade_ds_location indicates we need to fetch previous key
         if(offset == g_fw_upgrade.upgrade_ds_location)
         {
             wiced_ofu_restore_external_storage_key(secure);
-            encryption_incremental_offset = 0;
+            #if OFU_CRYPT_TYPE == OFU_CRYPT_TYPE_AES_CTR
+            // scan and create a list of blocks that can be read
+            fw_upgrade_scan_aes_ctr_blocks(offset);
+            #endif
         }
-        #if OFU_CRYPT_TYPE == OFU_CRYPT_TYPE_AES_CTR
-        fw_upgrade_read_mem(offset + encryption_incremental_offset, (uint8_t *)&offset, 4);
-        fw_upgrade_read_mem(offset + encryption_incremental_offset + 4, (uint8_t *)&len, 4);
-        encryption_incremental_offset += 8;
-        #endif
-        read = fw_upgrade_read_mem(offset+encryption_incremental_offset, data, len);
-        if(read > 0)
+    #if OFU_CRYPT_TYPE == OFU_CRYPT_TYPE_AES_CTR
+        // in case the data is spread over more than one encrypted block...
+        read = fw_upgrade_aes_ctr_read_partial_blocks(offset, data, len);
+    #else
+        read = fw_upgrade_read_mem(offset, data, len);
+        if(read == len)
         {
             wiced_ofu_crypt(WICED_FALSE, offset, len, data, data, secure);
         }
+    #endif
 #else
         read = fw_upgrade_read_mem(offset, data, len);
 #endif
