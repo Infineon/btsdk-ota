@@ -587,6 +587,16 @@ uint32_t wiced_firmware_upgrade_retrieve_from_active_ds(uint32_t offset, uint8_t
 #define IMAGE_META_DATA_PREFIX_LEN      12
 #define IMAGE_META_DATA_ID              0xABADCAFE
 
+uint32_t wiced_bt_get_nv_sector_size()
+{
+    uint32_t sector_size = 0;
+    if (g_nvram_intf == NVRAM_INTF_EFLASH)
+    {
+        sector_size = EF_PAGE_SIZE;
+    }
+    return sector_size;
+}
+
 void wiced_bt_fw_save_meta_data(uint8_t partition, uint8_t *p_data, uint32_t len)
 {
     uint32_t save_len = len + IMAGE_META_DATA_PREFIX_LEN;

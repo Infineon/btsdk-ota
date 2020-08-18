@@ -582,6 +582,12 @@ void wiced_bt_get_fw_image_chunk(uint8_t partition, uint32_t offset, uint8_t *p_
 #define IMAGE_META_DATA_PREFIX_LEN      12
 #define IMAGE_META_DATA_ID              0xABADCAFE
 
+uint32_t wiced_bt_get_nv_sector_size()
+{
+    uint32_t sector_size = (sfi_sectorErase256K) ? WICED_FW_UPGRADE_SF_SECTOR_SIZE_256K : WICED_FW_UPGRADE_SF_SECTOR_SIZE_4K;
+    return sector_size;
+}
+
 void wiced_bt_fw_save_meta_data(uint8_t partition, uint8_t *p_data, uint32_t len)
 {
     uint32_t save_len = len + IMAGE_META_DATA_PREFIX_LEN;

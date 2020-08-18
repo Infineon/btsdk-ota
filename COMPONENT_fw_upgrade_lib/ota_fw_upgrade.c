@@ -311,7 +311,7 @@ wiced_bool_t ota_fw_upgrade_handle_command(uint16_t conn_id, uint8_t *data, int3
 #else
         wiced_bt_l2cap_update_ble_conn_params(ota_fw_upgrade_state.bdaddr, 6, 6, 0, 200);
 #endif
-#elif ( defined(CYW20735B0) || defined(CYW20735B1) )
+#elif ( defined(CYW20735B0) || defined(CYW20735B1) || defined(CYW20835B1) )
 #ifndef OTA_SKIP_CONN_PARAM_UPDATE
         wiced_bt_l2cap_update_ble_conn_params(ota_fw_upgrade_state.bdaddr, 6, 6, 0, 200);
 #endif
@@ -390,7 +390,7 @@ wiced_bool_t ota_fw_upgrade_handle_command(uint16_t conn_id, uint8_t *data, int3
             p_state->recv_crc32           = 0xffffffff;
 #endif
 
-#if ( defined(CYW20719B0) || defined(CYW20719B1) || defined(CYW20721B1) || defined(CYW20721B2) || defined(CYW20719B2) || defined(CYW20735B0) || defined(CYW20735B1)/* || defined (CYW20819A1) */)
+#if ( defined(CYW20719B0) || defined(CYW20719B1) || defined(CYW20721B1) || defined(CYW20721B2) || defined(CYW20719B2) || defined(CYW20735B0) || defined(CYW20735B1) || defined(CYW20835B1)/* || defined (CYW20819A1) */)
             // if we are using Secure version the total length comes in the beginning of the image,
             // do not use the one from the downloader.
             if (p_ecdsa_public_key != NULL)
@@ -488,7 +488,7 @@ wiced_bool_t ota_fw_upgrade_handle_data(uint16_t conn_id, uint8_t *data, int32_t
         return FALSE;
     WICED_BT_TRACE("ota_fw_upgrade_handle_data\n");
 
-// Image prefixes are supported on 20719xx and 20735
+// Image prefixes are supported on 20719xx and 20735/20835
 #ifndef CYW20706A2
     // For the Secure upgrade, verify the Product info
     if (p_ecdsa_public_key != NULL)
@@ -527,7 +527,7 @@ wiced_bool_t ota_fw_upgrade_handle_data(uint16_t conn_id, uint8_t *data, int32_t
 #ifdef CYW20706A2
         p_state->recv_crc32 = update_crc(p_state->recv_crc32, data, len);
 #else
-#if (defined(CYW20719B2) || defined(CYW20721B2) || defined(CYW20719B2) || defined(CYW20735B1) || defined(CYW20819A1))
+#if (defined(CYW20719B2) || defined(CYW20721B2) || defined(CYW20719B2) || defined(CYW20735B1) || defined(CYW20835B1) || defined(CYW20819A1))
         p_state->recv_crc32 = crc32_Update(p_state->recv_crc32, data, len);
 #else
         p_state->recv_crc32 = update_crc32(p_state->recv_crc32, data, len);

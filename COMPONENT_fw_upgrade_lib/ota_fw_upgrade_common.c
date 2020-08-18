@@ -253,7 +253,7 @@ int32_t ota_fw_upgrade_verify(void)
 #ifdef CYW20706A2
         crc32 = update_crc(crc32, memory_chunk, bytes_to_read);
 #else
-#if (defined(CYW20719B2) || defined(CYW20721B2) || defined(CYW20719B2) || defined(CYW20735B1) || defined(CYW20819A1))
+#if (defined(CYW20719B2) || defined(CYW20721B2) || defined(CYW20719B2) || defined(CYW20735B1) || defined(CYW20835B1) || defined(CYW20819A1))
         crc32 = crc32_Update(crc32, memory_chunk, bytes_to_read);
 #else
         crc32 = update_crc32(crc32, memory_chunk, bytes_to_read);
@@ -414,7 +414,7 @@ int32_t ota_fw_upgrade_calculate_checksum( int32_t offset, int32_t length )
 #if (OTA_CHIP == 20703) || (defined(CYW20706A2))
         crc32 = update_crc(crc32, memory_chunk, bytes_to_read);
 #else
-#if (defined(CYW20719B2) || defined(CYW20721B2) || defined(CYW20719B2) || defined(CYW20735B1) || defined(CYW20819A1))
+#if (defined(CYW20719B2) || defined(CYW20721B2) || defined(CYW20719B2) || defined(CYW20735B1) || defined(CYW20835B1) || defined(CYW20819A1))
         crc32 = crc32_Update(crc32, memory_chunk, bytes_to_read);
 #else
         crc32 = update_crc32(crc32, memory_chunk, bytes_to_read);
@@ -444,7 +444,7 @@ wiced_bool_t ota_fw_upgrade_image_data_handler(uint16_t conn_id, uint8_t *data, 
     if (p_state->state != OTA_STATE_DATA_TRANSFER)
         return FALSE;
 
-// Image prefixes are supported on 20719xx and 20735
+// Image prefixes are supported on 20719xx and 20735/20835
 #ifndef CYW20706A2
     // For the Secure upgrade, verify the Product info
     if (p_ecdsa_public_key != NULL)
@@ -475,7 +475,7 @@ wiced_bool_t ota_fw_upgrade_image_data_handler(uint16_t conn_id, uint8_t *data, 
 #ifdef CYW20706A2
         p_state->recv_crc32 = update_crc(p_state->recv_crc32, data, len);
 #else
-#if (defined(CYW20719B2) || defined(CYW20721B2) || defined(CYW20719B2) || defined(CYW20735B1) || defined(CYW20819A1))
+#if (defined(CYW20719B2) || defined(CYW20721B2) || defined(CYW20719B2) || defined(CYW20735B1) || defined(CYW20835B1) || defined(CYW20819A1))
         p_state->recv_crc32 = crc32_Update(p_state->recv_crc32, data, len);
 #else
         p_state->recv_crc32 = update_crc32(p_state->recv_crc32, data, len);
