@@ -134,6 +134,4 @@ include $(CY_TOOLS_DIR)/make/start.mk
 ifeq ($(CY_TARGET_DEVICE)$(TARGET),)
 all:
 	@echo This is not a buildable application project - \"make $@\" : Success
-else
--include internal.mk
 endif
