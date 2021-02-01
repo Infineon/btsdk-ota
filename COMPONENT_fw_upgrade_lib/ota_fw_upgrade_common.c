@@ -1,10 +1,10 @@
 /*
- * Copyright 2016-2020, Cypress Semiconductor Corporation or a subsidiary of
- * Cypress Semiconductor Corporation. All Rights Reserved.
+ * Copyright 2016-2021, Cypress Semiconductor Corporation (an Infineon company) or
+ * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
  *
  * This software, including source code, documentation and related
- * materials ("Software"), is owned by Cypress Semiconductor Corporation
- * or one of its subsidiaries ("Cypress") and is protected by and subject to
+ * materials ("Software") is owned by Cypress Semiconductor Corporation
+ * or one of its affiliates ("Cypress") and is protected by and subject to
  * worldwide patent protection (United States and foreign),
  * United States copyright laws and international treaty provisions.
  * Therefore, you may use this Software only as provided in the license
@@ -13,7 +13,7 @@
  * If no EULA applies, Cypress hereby grants you a personal, non-exclusive,
  * non-transferable license to copy, modify, and compile the Software
  * source code solely for use in connection with Cypress's
- * integrated circuit products. Any reproduction, modification, translation,
+ * integrated circuit products.  Any reproduction, modification, translation,
  * compilation, or representation of this Software except as specified
  * above is prohibited without the express written permission of Cypress.
  *
@@ -287,6 +287,14 @@ int32_t ota_sec_fw_upgrade_verify(void)
     uint8_t      signature[SIGNATURE_LEN + 4];
     uint8_t      res;
 
+// keep messaging consistent with ota_fw_upgrade_verify()
+#if defined(OTA_FW_LIB_HCI_DFU)
+    if (ota_fw_upgrade_status_callback)
+    {
+        (*ota_fw_upgrade_status_callback)(OTA_FW_UPGRADE_STATUS_VERIFICATION_START);
+    }
+#endif
+
 #if !defined(OTA_ENCRYPT_SFLASH_DATA)
     nvram_len -= SIGNATURE_LEN;
 #endif
@@ -373,7 +381,7 @@ int32_t ota_sec_fw_upgrade_verify(void)
 #endif
 
 #ifdef OTA_UPGRADE_DEBUG
-    WICED_BT_TRACE("ecdsa_verify_:%d", res);
+    WICED_BT_TRACE("ecdsa_verify_:%d\n", res);
 #endif
     return res;
 }

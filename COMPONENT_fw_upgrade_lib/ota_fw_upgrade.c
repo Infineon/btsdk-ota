@@ -1,10 +1,10 @@
 /*
- * Copyright 2016-2020, Cypress Semiconductor Corporation or a subsidiary of
- * Cypress Semiconductor Corporation. All Rights Reserved.
+ * Copyright 2016-2021, Cypress Semiconductor Corporation (an Infineon company) or
+ * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
  *
  * This software, including source code, documentation and related
- * materials ("Software"), is owned by Cypress Semiconductor Corporation
- * or one of its subsidiaries ("Cypress") and is protected by and subject to
+ * materials ("Software") is owned by Cypress Semiconductor Corporation
+ * or one of its affiliates ("Cypress") and is protected by and subject to
  * worldwide patent protection (United States and foreign),
  * United States copyright laws and international treaty provisions.
  * Therefore, you may use this Software only as provided in the license
@@ -13,7 +13,7 @@
  * If no EULA applies, Cypress hereby grants you a personal, non-exclusive,
  * non-transferable license to copy, modify, and compile the Software
  * source code solely for use in connection with Cypress's
- * integrated circuit products. Any reproduction, modification, translation,
+ * integrated circuit products.  Any reproduction, modification, translation,
  * compilation, or representation of this Software except as specified
  * above is prohibited without the express written permission of Cypress.
  *
@@ -80,8 +80,8 @@ uint16_t                                      ota_client_config_descriptor = 0;
 extern uint32_t update_crc(uint32_t crc, uint8_t *buf, uint16_t len);
 
 static void                   ota_fw_upgrade_set_client_configuration(uint16_t client_config);
-static wiced_bool_t           ota_fw_upgrade_handle_data(uint16_t conn_id, uint8_t *data, int32_t len);
-static wiced_bool_t           ota_fw_upgrade_handle_command(uint16_t conn_id, uint8_t *data, int32_t len);
+wiced_bool_t           ota_fw_upgrade_handle_data(uint16_t conn_id, uint8_t *data, int32_t len);
+wiced_bool_t           ota_fw_upgrade_handle_command(uint16_t conn_id, uint8_t *data, int32_t len);
 static wiced_bt_gatt_status_t ota_fw_upgrade_send_notification(uint16_t conn_id, uint16_t attr_handle, uint16_t val_len, uint8_t *p_val);
 static void                   ota_fw_upgrade_reset_timeout(uint32_t param);
 extern UINT32 crc32_Update( UINT32 crc, UINT8 *buf, UINT16 len );
@@ -184,10 +184,15 @@ wiced_bt_gatt_status_t wiced_ota_fw_upgrade_indication_cfm_handler(uint16_t conn
             else
             {
                 // disconnect and start timer to trigger hardware reset 1 second later
+                wiced_result_t status;
                 wiced_bt_gatt_disconnect(conn_id);
                 wiced_deinit_timer(&ota_fw_upgrade_state.reset_timer);
                 wiced_init_timer(&ota_fw_upgrade_state.reset_timer, ota_fw_upgrade_reset_timeout, 0, WICED_SECONDS_TIMER);
-                wiced_start_timer(&ota_fw_upgrade_state.reset_timer, 1);
+                status = wiced_start_timer(&ota_fw_upgrade_state.reset_timer, 1);
+                if (status != WICED_SUCCESS)
+                {
+                    WICED_BT_TRACE("%s: wiced_start_timer failed, status:%d \n", __func__, status);
+                }
             }
         }
         return WICED_BT_GATT_SUCCESS;
@@ -261,10 +266,12 @@ int perform_verification(void *data)
         }
     }
     // if we are unable to send indication, try to send notification and start 1 sec timer
+#if !defined(OTA_FW_LIB_HCI_DFU)
     if (ota_client_config_descriptor & GATT_CLIENT_CONFIG_NOTIFICATION)
     {
         if (ota_fw_upgrade_send_notification(conn_id, HANDLE_OTA_FW_UPGRADE_CONTROL_POINT, 1, &value) == WICED_BT_GATT_SUCCESS)
         {
+#endif
             // notify application that we are going down
             if (ota_fw_upgrade_status_callback)
             {
@@ -279,13 +286,20 @@ int perform_verification(void *data)
             else
             {
                 // Start timer to disconnect in a second (parameter passed to the function is conn_id)
+                wiced_result_t status;
                 wiced_deinit_timer(&ota_fw_upgrade_state.reset_timer);
                 wiced_init_timer(&ota_fw_upgrade_state.reset_timer, ota_fw_upgrade_reset_timeout, conn_id, WICED_SECONDS_TIMER);
-                wiced_start_timer(&ota_fw_upgrade_state.reset_timer, 1);
+                status = wiced_start_timer(&ota_fw_upgrade_state.reset_timer, 1);
+                if (status != WICED_SUCCESS)
+                {
+                    WICED_BT_TRACE("%s: wiced_start_timer failed, status:%d \n", __func__, status);
+                }
             }
             return WICED_TRUE;
+#if !defined(OTA_FW_LIB_HCI_DFU)
         }
     }
+#endif
     WICED_BT_TRACE("failed to notify the app\n");
     return WICED_TRUE;
 }
@@ -634,10 +648,15 @@ void ota_fw_upgrade_reset_timeout(uint32_t param)
     // if conn_id is not zero, connection is still up, disconnect and start 1 second timer before reset
     if (ota_fw_upgrade_state.conn_id)
     {
-       wiced_bt_gatt_disconnect(ota_fw_upgrade_state.conn_id);
-       wiced_deinit_timer(&ota_fw_upgrade_state.reset_timer);
-       wiced_init_timer(&ota_fw_upgrade_state.reset_timer, ota_fw_upgrade_reset_timeout, 0, WICED_SECONDS_TIMER);
-       wiced_start_timer(&ota_fw_upgrade_state.reset_timer, 1);
+        wiced_result_t status;
+        wiced_bt_gatt_disconnect(ota_fw_upgrade_state.conn_id);
+        wiced_deinit_timer(&ota_fw_upgrade_state.reset_timer);
+        wiced_init_timer(&ota_fw_upgrade_state.reset_timer, ota_fw_upgrade_reset_timeout, 0, WICED_SECONDS_TIMER);
+        status = wiced_start_timer(&ota_fw_upgrade_state.reset_timer, 1);
+        if (status != WICED_SUCCESS)
+        {
+            WICED_BT_TRACE("%s: wiced_start_timer failed, status:%d \n", __func__, status);
+        }
     }
     else
        wiced_firmware_upgrade_finish();

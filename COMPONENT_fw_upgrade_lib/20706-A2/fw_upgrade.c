@@ -1,10 +1,10 @@
 /*
- * Copyright 2016-2020, Cypress Semiconductor Corporation or a subsidiary of
- * Cypress Semiconductor Corporation. All Rights Reserved.
+ * Copyright 2016-2021, Cypress Semiconductor Corporation (an Infineon company) or
+ * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
  *
  * This software, including source code, documentation and related
- * materials ("Software"), is owned by Cypress Semiconductor Corporation
- * or one of its subsidiaries ("Cypress") and is protected by and subject to
+ * materials ("Software") is owned by Cypress Semiconductor Corporation
+ * or one of its affiliates ("Cypress") and is protected by and subject to
  * worldwide patent protection (United States and foreign),
  * United States copyright laws and international treaty provisions.
  * Therefore, you may use this Software only as provided in the license
@@ -13,7 +13,7 @@
  * If no EULA applies, Cypress hereby grants you a personal, non-exclusive,
  * non-transferable license to copy, modify, and compile the Software
  * source code solely for use in connection with Cypress's
- * integrated circuit products. Any reproduction, modification, translation,
+ * integrated circuit products.  Any reproduction, modification, translation,
  * compilation, or representation of this Software except as specified
  * above is prohibited without the express written permission of Cypress.
  *
@@ -394,68 +394,6 @@ void wiced_firmware_upgrade_finish(void)
 #define PARTITION_ACTIVE    0
 #define PARTITION_UPGRADE   1
 
-uint32_t wiced_bt_get_fw_image_size(uint8_t partition)
-{
-#define PARTITION_END_MARKER    0xFE
-#define READ_CHUNK_SIZE         512
-
-    uint8_t     memory_chunk[READ_CHUNK_SIZE];
-    uint32_t    image_size = 0, bytes_read, i;
-    uint32_t    offset;
-
-    if (partition == PARTITION_ACTIVE)
-        offset = Config_DS_Location;
-    else
-        offset = (Config_DS_Location == g_nv_loc_len.ds1_loc) ? g_nv_loc_len.ds2_loc : g_nv_loc_len.ds1_loc;
-
-    /* DS config items are stored as type-length-value (1 byte - 2 bytes - length bytes) tuples and
-    the last item has type = 0xFE, length = 0x0000. So you should be able to read 3 bytes, then
-    use byte 1 and 2 from that, and use this as the length bytes (little endian) to the next item till you find type = 0xFE. */
-    do{
-        /* to reduce number of flash reads, read 512 chunks at a time */
-        bytes_read = wiced_hal_sflash_read(CONVERT_TO_NV_VIRTUAL_ADDRESS(offset), READ_CHUNK_SIZE, memory_chunk);
-//        WICED_BT_TRACE("br: %d offset: %08x j:%d \n", bytes_read, offset, j);
-        if (bytes_read)
-        {
-            /* parse tlvs to get the length of partition. If tlv itself (i.e. 3 bytes) is
-            not complete in this read, do not parse it so that it will be processed in next flash read */
-            for (i = 0; (i+3) <= bytes_read; )
-            {
-                uint8_t *p = &memory_chunk[i];
-
-                if (*p == PARTITION_END_MARKER)
-                {
-                    /* end marker is 3 byte tlv */
-                    image_size += (i + 3);
-
-                    return image_size;
-                }
-                else
-                {
-                    /* next tlv offset  = length of current value + 3 bytes for tlv itself */
-                    p++;
-                    i += (((uint16_t)(*p + ((*(p + 1)) << 8))) + 3);
-                }
-            }
-
-            /* move offset to point to next tlv */
-            offset += i;
-
-            /* calculate image_size by sum of all tlv tupples and its value lengths */
-            image_size += i;
-
-            /* for safe side, feed watch dog to avoid fw restart in case of lengthy firmwares */
-            wiced_hal_wdog_restart ();
-        }
-        else
-        {
-            break;
-        }
-    }while(TRUE);
-
-    return image_size;
-}
-
 uint32_t wiced_bt_get_fw_image_chunk(uint8_t partition, uint32_t offset, uint8_t *p_data, uint16_t data_len)
 {
     uint32_t base_offset;
@@ -468,77 +406,10 @@ uint32_t wiced_bt_get_fw_image_chunk(uint8_t partition, uint32_t offset, uint8_t
     return fw_upgrade_read_mem(CONVERT_TO_NV_VIRTUAL_ADDRESS((offset+base_offset)), p_data, data_len);
 }
 
-#define IMAGE_META_DATA_PREFIX_LEN      12
-#define IMAGE_META_DATA_ID              0xABADCAFE
-
 uint32_t wiced_bt_get_nv_sector_size()
 {
     uint32_t sector_size = (sfi_sectorErase256K) ? WICED_FW_UPGRADE_SF_SECTOR_SIZE_256K : WICED_FW_UPGRADE_SF_SECTOR_SIZE_4K;
+
     return sector_size;
-}
-
-void wiced_bt_fw_save_meta_data(uint8_t partition, uint8_t *p_data, uint32_t len)
-{
-    uint32_t save_len = len + IMAGE_META_DATA_PREFIX_LEN;
-    uint8_t *p_save_data;
-    uint8_t *p;
-
-    if (len == 0)       // Remove meta data
-    {
-        wiced_firmware_upgrade_erase_nv(0, 1);
-        return;
-    }
-
-    p_save_data = wiced_bt_get_buffer(save_len);
-    if (p_save_data == NULL)
-        return;
-
-    p = p_save_data;
-    UINT32_TO_STREAM(p, 0xFFFFFFFF);
-    UINT32_TO_STREAM(p, IMAGE_META_DATA_ID);
-    UINT32_TO_STREAM(p, len);
-    memcpy(p, p_data, len);
-    if (partition == PARTITION_UPGRADE)
-    {
-        wiced_firmware_upgrade_store_to_nv(0, p_save_data, (save_len + 3) & 0xFFFFFFFC);
-    }
-
-    wiced_bt_free_buffer(p_save_data);
-}
-
-wiced_bool_t wiced_bt_fw_read_meta_data(uint8_t partition, uint8_t *p_data, uint32_t *p_len)
-{
-    uint8_t buffer[IMAGE_META_DATA_PREFIX_LEN];
-    uint8_t *p = buffer;
-    uint32_t temp;
-    uint32_t data_len;
-    wiced_bool_t got_data = WICED_FALSE;
-
-    if (p_data == NULL || p_len == NULL)
-        return WICED_FALSE;
-
-    if (partition == PARTITION_UPGRADE)
-    {
-        if (wiced_firmware_upgrade_retrieve_from_nv(0, buffer, IMAGE_META_DATA_PREFIX_LEN) == IMAGE_META_DATA_PREFIX_LEN)
-        {
-            STREAM_TO_UINT32(temp, p);
-            //if (temp != 0xFFFFFFFF)
-            //    return WICED_FALSE;
-            STREAM_TO_UINT32(temp, p);
-            if (temp != IMAGE_META_DATA_ID)
-                return WICED_FALSE;
-            STREAM_TO_UINT32(data_len, p);
-            if (data_len > *p_len)
-                return WICED_FALSE;
-
-            if (wiced_firmware_upgrade_retrieve_from_nv(IMAGE_META_DATA_PREFIX_LEN, p_data, data_len) == data_len)
-            {
-                *p_len = data_len;
-                got_data = WICED_TRUE;
-            }
-        }
-    }
-
-    return got_data;
 }
 #endif // CYW20706A2

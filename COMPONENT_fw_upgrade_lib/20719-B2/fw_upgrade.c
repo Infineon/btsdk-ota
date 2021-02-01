@@ -1,10 +1,10 @@
 /*
- * Copyright 2016-2020, Cypress Semiconductor Corporation or a subsidiary of
- * Cypress Semiconductor Corporation. All Rights Reserved.
+ * Copyright 2016-2021, Cypress Semiconductor Corporation (an Infineon company) or
+ * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
  *
  * This software, including source code, documentation and related
- * materials ("Software"), is owned by Cypress Semiconductor Corporation
- * or one of its subsidiaries ("Cypress") and is protected by and subject to
+ * materials ("Software") is owned by Cypress Semiconductor Corporation
+ * or one of its affiliates ("Cypress") and is protected by and subject to
  * worldwide patent protection (United States and foreign),
  * United States copyright laws and international treaty provisions.
  * Therefore, you may use this Software only as provided in the license
@@ -13,7 +13,7 @@
  * If no EULA applies, Cypress hereby grants you a personal, non-exclusive,
  * non-transferable license to copy, modify, and compile the Software
  * source code solely for use in connection with Cypress's
- * integrated circuit products. Any reproduction, modification, translation,
+ * integrated circuit products.  Any reproduction, modification, translation,
  * compilation, or representation of this Software except as specified
  * above is prohibited without the express written permission of Cypress.
  *
@@ -526,26 +526,8 @@ uint8_t firmware_upgrade_switch_eflash_active_ds(void)
 }
 
 
-
-
 #define PARTITION_ACTIVE    0
 #define PARTITION_UPGRADE   1
-uint32_t wiced_bt_get_fw_image_size(uint8_t partition)
-{
-    uint8_t data[16];
-    uint32_t image_size = 0;
-    uint32_t offset = PARTITION_ACTIVE ? g_fw_upgrade.active_ds_location : g_fw_upgrade.upgrade_ds_location;
-    if (wiced_hal_eflash_read(offset - EF_BASE_ADDR, data, 16) == WICED_SUCCESS)
-    {
-        image_size = data[12] + (data[13] << 8) + (data[14] << 16) + (data[15] << 24);
-        WICED_BT_TRACE("image size:%d offset:%08x\n", image_size, offset);
-    }
-    else
-    {
-        WICED_BT_TRACE("failed to read header offset:%08x\n", offset);
-    }
-    return image_size;
-}
 
 void wiced_bt_get_fw_image_chunk(uint8_t partition, uint32_t offset, uint8_t *p_data, uint16_t data_len)
 {
@@ -584,81 +566,15 @@ uint32_t wiced_firmware_upgrade_retrieve_from_active_ds(uint32_t offset, uint8_t
     return 0;
 }
 
-#define IMAGE_META_DATA_PREFIX_LEN      12
-#define IMAGE_META_DATA_ID              0xABADCAFE
-
 uint32_t wiced_bt_get_nv_sector_size()
 {
     uint32_t sector_size = 0;
+
     if (g_nvram_intf == NVRAM_INTF_EFLASH)
     {
         sector_size = EF_PAGE_SIZE;
     }
+
     return sector_size;
-}
-
-void wiced_bt_fw_save_meta_data(uint8_t partition, uint8_t *p_data, uint32_t len)
-{
-    uint32_t save_len = len + IMAGE_META_DATA_PREFIX_LEN;
-    uint8_t *p_save_data;
-    uint8_t *p;
-
-    if (len == 0)       // Remove meta data
-    {
-        wiced_firmware_upgrade_erase_nv(0, 1);
-        return;
-    }
-
-    p_save_data = wiced_bt_get_buffer(save_len);
-    if (p_save_data == NULL)
-        return;
-
-    p = p_save_data;
-    UINT32_TO_STREAM(p, 0xFFFFFFFF);
-    UINT32_TO_STREAM(p, IMAGE_META_DATA_ID);
-    UINT32_TO_STREAM(p, len);
-    memcpy(p, p_data, len);
-    if (partition == PARTITION_UPGRADE)
-    {
-        wiced_firmware_upgrade_store_to_nv(0, p_save_data, (save_len + 3) & 0xFFFFFFFC);
-    }
-
-    wiced_bt_free_buffer(p_save_data);
-}
-
-wiced_bool_t wiced_bt_fw_read_meta_data(uint8_t partition, uint8_t *p_data, uint32_t *p_len)
-{
-    uint8_t buffer[IMAGE_META_DATA_PREFIX_LEN];
-    uint8_t *p = buffer;
-    uint32_t temp;
-    uint32_t data_len;
-    wiced_bool_t got_data = WICED_FALSE;
-
-    if (p_data == NULL || p_len == NULL)
-        return WICED_FALSE;
-
-    if (partition == PARTITION_UPGRADE)
-    {
-        if (wiced_firmware_upgrade_retrieve_from_nv(0, buffer, IMAGE_META_DATA_PREFIX_LEN) == IMAGE_META_DATA_PREFIX_LEN)
-        {
-            STREAM_TO_UINT32(temp, p);
-            //if (temp != 0xFFFFFFFF)
-            //    return WICED_FALSE;
-            STREAM_TO_UINT32(temp, p);
-            if (temp != IMAGE_META_DATA_ID)
-                return WICED_FALSE;
-            STREAM_TO_UINT32(data_len, p);
-            if (data_len > *p_len)
-                return WICED_FALSE;
-
-            if (wiced_firmware_upgrade_retrieve_from_nv(IMAGE_META_DATA_PREFIX_LEN, p_data, data_len) == data_len)
-            {
-                *p_len = data_len;
-                got_data = WICED_TRUE;
-            }
-        }
-    }
-
-    return got_data;
 }
 #endif // CYW20719B2
