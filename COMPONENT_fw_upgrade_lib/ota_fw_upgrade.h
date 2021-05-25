@@ -88,7 +88,7 @@ typedef struct
     wiced_ota_firmware_event_callback_t *p_event_callback;
 } ota_fw_upgrade_state_t;
 
-extern const uint8_t                                          ds_image_prefix[8];
+extern const uint8_t                                    ds_image_prefix[8];
 extern ota_fw_upgrade_state_t                           ota_fw_upgrade_state;
 extern wiced_ota_firmware_upgrade_status_callback_t     *ota_fw_upgrade_status_callback;
 extern wiced_ota_firmware_upgrade_send_data_callback_t  *ota_fw_upgrade_send_data_callback;

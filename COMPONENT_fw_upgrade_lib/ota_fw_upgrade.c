@@ -86,7 +86,10 @@ static wiced_bt_gatt_status_t ota_fw_upgrade_send_notification(uint16_t conn_id,
 static void                   ota_fw_upgrade_reset_timeout(uint32_t param);
 extern UINT32 crc32_Update( UINT32 crc, UINT8 *buf, UINT16 len );
 extern uint32_t update_crc32(uint32_t crc, uint8_t *buf, uint16_t len);
+extern void allowPeripheralLatency(BOOL8 allow);
+// deprecated and renamed
 extern void allowSlaveLatency(BOOL8 allow);
+#define allowPeripheralLatency(x) allowSlaveLatency(x)
 
 /*
  * Process GATT Read request
@@ -320,8 +323,8 @@ wiced_bool_t ota_fw_upgrade_handle_command(uint16_t conn_id, uint8_t *data, int3
     if (command == WICED_OTA_UPGRADE_COMMAND_PREPARE_DOWNLOAD)
     {
 #if (defined(CYW20719B1) || defined(CYW20721B1) || defined(CYW20721B2) || defined(CYW20719B2) || defined (CYW20819A1))
-#ifdef DISABLED_SLAVE_LATENCY_ONLY
-        allowSlaveLatency(FALSE);
+#ifdef DISABLED_PERIPHERAL_LATENCY_ONLY
+        allowPeripheralLatency(FALSE);
 #else
         wiced_bt_l2cap_update_ble_conn_params(ota_fw_upgrade_state.bdaddr, 6, 6, 0, 200);
 #endif
@@ -348,8 +351,8 @@ wiced_bool_t ota_fw_upgrade_handle_command(uint16_t conn_id, uint8_t *data, int3
     if (command == WICED_OTA_UPGRADE_COMMAND_ABORT)
     {
 #if (defined(CYW20719B1) || defined(CYW20721B1) || defined(CYW20721B2) || defined(CYW20719B2) || defined (CYW20819A1))
-#ifdef DISABLED_SLAVE_LATENCY_ONLY
-        allowSlaveLatency(TRUE);
+#ifdef DISABLED_PERIPHERAL_LATENCY_ONLY
+        allowPeripheralLatency(TRUE);
 #endif
 #endif
         p_state->state = OTA_STATE_ABORTED;
@@ -492,10 +495,8 @@ wiced_bool_t ota_fw_upgrade_handle_data(uint16_t conn_id, uint8_t *data, int32_t
     ota_fw_upgrade_state_t *p_state = &ota_fw_upgrade_state;
     uint8_t *p = data;
 #ifndef CYW20706A2
-#ifdef WICED_BT_TRACE_ENABLE
-    uint16_t image_product_id;
-    uint8_t  image_major, image_minor;
-#endif
+    wiced_bt_application_id_t app_id_and_ver;
+    wiced_bt_application_id_t *image_id_and_ver;
 #endif
 
     if (p_state->state != OTA_STATE_DATA_TRANSFER)
@@ -516,21 +517,35 @@ wiced_bool_t ota_fw_upgrade_handle_data(uint16_t conn_id, uint8_t *data, int32_t
                 WICED_BT_TRACE("Bad data start\n");
                 return (FALSE);
             }
-#ifdef WICED_BT_TRACE_ENABLE
-            image_product_id = data[8] + (data[9] << 8);
-            image_major = data[10];
-            image_minor = data[11];
-#endif
+
+            // validate application id and version
+            image_id_and_ver = (wiced_bt_application_id_t *)&data[8];
+            WICED_BT_TRACE("Image product ID 0x%x and version %d.%d\n", image_id_and_ver->product_id,
+                                                image_id_and_ver->major, image_id_and_ver->minor);
+            if(!wiced_get_current_app_id_and_version(&app_id_and_ver))
+            {
+                WICED_BT_TRACE("Failed to read current app version and id\n");
+                return (FALSE);
+            }
+            if( (image_id_and_ver->product_id != app_id_and_ver.product_id) &&
+                (app_id_and_ver.product_id != 0))
+            {
+                WICED_BT_TRACE("Image product ID (%x) does not match current (%x)\n",
+                            image_id_and_ver->product_id, app_id_and_ver.product_id);
+                return (FALSE);
+            }
+            if(image_id_and_ver->major < app_id_and_ver.major)
+            {
+                WICED_BT_TRACE("Image major version (%d) is behind current (%d)\n",
+                            image_id_and_ver->major, app_id_and_ver.major);
+                return (FALSE);
+            }
 
             // length store in the image does not include size of ds_image_prefix
             p_state->total_len = data[12] + (data[13] << 8) + (data[14] << 16) + (data[15] << 24);
             p_state->total_len += DS_IMAGE_PREFIX_LEN + SIGNATURE_LEN;
 
             // ToDo validate flash size
-            // ToDo validate that product is the same as stored and major is >= the one that stored
-#ifdef WICED_BT_TRACE_ENABLE
-            WICED_BT_TRACE("Image for Product 0x%x %d.%d len:%d\n", image_product_id, image_major, image_minor, p_state->total_len);
-#endif
         }
     }
     else

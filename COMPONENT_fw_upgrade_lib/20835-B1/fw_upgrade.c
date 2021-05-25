@@ -89,8 +89,10 @@ typedef struct
     uint32_t upgrade_ds_length;
     uint32_t upgrade_ds_signature;
 
-    uint32_t erase_start;
-    uint32_t bytes_erased;
+    wiced_bool_t random_write_mode;
+    uint32_t random_write_start;
+    uint32_t random_write_end;
+    uint8_t* random_write_bitfield;
 } wiced_fw_upgrade_t;
 
 /******************************************************
@@ -345,6 +347,8 @@ wiced_bool_t wiced_firmware_upgrade_init(wiced_fw_upgrade_nv_loc_len_t *p_sflash
         return WICED_FALSE;
     }
 
+    g_fw_upgrade.random_write_mode = WICED_FALSE;
+    g_fw_upgrade.random_write_bitfield = NULL;
     return WICED_TRUE;
 }
 
@@ -376,37 +380,83 @@ uint32_t wiced_firmware_upgrade_init_nv_locations(void)
 //                                    ((p_gdata->active_ds_location == g_nv_loc_len.ds1_loc) ?
 //                                      g_nv_loc_len.ds1_len : g_nv_loc_len.ds2_len);
 
-    p_gdata->bytes_erased = 0;
-
     return 1;
 }
 
-wiced_bool_t wiced_firmware_upgrade_erase_nv(uint32_t start, uint32_t size)
+uint32_t wiced_bt_get_nv_sector_size()
 {
-    wiced_fw_upgrade_t *p_gdata = &g_fw_upgrade;
-    uint32_t sector_size = sfi_sectorErase256K ? WICED_FW_UPGRADE_SF_SECTOR_SIZE_256K : WICED_FW_UPGRADE_SF_SECTOR_SIZE_4K;
-    uint32_t offset;
+    uint32_t sector_size = (sfi_sectorErase256K) ? WICED_FW_UPGRADE_SF_SECTOR_SIZE_256K : WICED_FW_UPGRADE_SF_SECTOR_SIZE_4K;
+    return sector_size;
+}
 
-    if (start % sector_size)
+void wiced_firmware_upgrade_random_write_stop()
+{
+    wiced_fw_upgrade_t* p_gdata = &g_fw_upgrade;
+
+    if (p_gdata->random_write_bitfield)
+    {
+        wiced_bt_free_buffer(p_gdata->random_write_bitfield);
+        p_gdata->random_write_bitfield = NULL;
+    }
+    p_gdata->random_write_mode = WICED_FALSE;
+}
+
+/*
+ * Some application (such a DFU) does not write FW image to NV in order. In this case we need to
+ * setup a bitfield to mark erased sectors, check the bitfield before each write, if the sector is
+ * never written erase it first, then mark this sector in the bitfield as erased sector.
+ */
+wiced_bool_t wiced_firmware_upgrade_random_write_start(uint32_t start, uint32_t size)
+{
+    wiced_fw_upgrade_t* p_gdata = &g_fw_upgrade;
+    uint32_t sector_size = wiced_bt_get_nv_sector_size();
+    uint32_t write_bitfield_bytes;
+
+    /* Sanity check */
+    if (sector_size == 0)
         return WICED_FALSE;
 
-    for (offset = 0; offset < size; offset += sector_size)
-        fw_upgrade_erase_sector(start + offset + g_fw_upgrade.upgrade_ds_location);
+    if ((start % sector_size) != 0)
+        return WICED_FALSE;
 
-    p_gdata->erase_start = start;
-    p_gdata->bytes_erased = offset;
+    if (p_gdata->random_write_mode)
+        wiced_firmware_upgrade_random_write_stop();
+
+    write_bitfield_bytes = ((size / sector_size) + 7) / 8;
+    p_gdata->random_write_bitfield = wiced_bt_get_buffer(write_bitfield_bytes);
+    if (!p_gdata->random_write_bitfield)
+        return WICED_FALSE;
+
+    memset(p_gdata->random_write_bitfield, 0, write_bitfield_bytes);
+    p_gdata->random_write_start = start;
+    p_gdata->random_write_end = start + size;
+    p_gdata->random_write_mode = WICED_TRUE;
     return WICED_TRUE;
 }
 
-wiced_bool_t fw_upgrade_is_sector_erased(uint32_t offset)
+/*
+ * Check if the sector needs to be erased. Return WICED_TRUE if it should be erased, otherwise return WICED_FALSE.
+ *  Note: The sector will be marked as erased when WICED_TRUE is returned. So the next time same sector is checked
+ *  it will return WICED_FALSE.
+ */
+wiced_bool_t firmware_upgrade_random_write_erase_check(uint32_t offset)
 {
-    wiced_fw_upgrade_t *p_gdata = &g_fw_upgrade;
+    wiced_fw_upgrade_t* p_gdata = &g_fw_upgrade;
+    uint32_t sector_size = wiced_bt_get_nv_sector_size();
+    uint32_t sector_idx, bitfield_idx;
+    uint8_t bitmask;
 
-    if (p_gdata->bytes_erased == 0
-        || offset < p_gdata->erase_start
-        || offset >= (p_gdata->erase_start + p_gdata->bytes_erased))
+    /* Sanity check */
+    if (sector_size == 0 || p_gdata->random_write_bitfield == NULL || offset > p_gdata->random_write_end)
         return WICED_FALSE;
 
+    sector_idx = (offset - p_gdata->random_write_start) / sector_size;
+    bitfield_idx = sector_idx / 8;
+    bitmask = 1 << (sector_idx % 8);
+    if (p_gdata->random_write_bitfield[bitfield_idx] & bitmask)
+        return WICED_FALSE;
+
+    p_gdata->random_write_bitfield[bitfield_idx] |= bitmask;
     return WICED_TRUE;
 }
 
@@ -418,8 +468,16 @@ uint32_t wiced_firmware_upgrade_store_to_nv(uint32_t offset, uint8_t *data, uint
         uint32_t sector_size = sfi_sectorErase256K ? WICED_FW_UPGRADE_SF_SECTOR_SIZE_256K : WICED_FW_UPGRADE_SF_SECTOR_SIZE_4K;
         uint8_t  skip_len = 0;
 
+        // if in random write mode check if this sector needs to be erased.
+        if (g_fw_upgrade.random_write_mode)
+        {
+            if (firmware_upgrade_random_write_erase_check(offset))
+            {
+                fw_upgrade_erase_sector(offset - (offset % sector_size) + g_fw_upgrade.upgrade_ds_location);
+            }
+        }
         // if this is a beginning of a new sector erase first.
-        if ((offset % sector_size) == 0 && !fw_upgrade_is_sector_erased(offset))
+        else if ((offset % sector_size) == 0)
         {
             fw_upgrade_erase_sector(offset + g_fw_upgrade.upgrade_ds_location);
         }
@@ -541,6 +599,13 @@ uint32_t fw_upgrade_write_mem(uint32_t write_to, uint8_t *data, uint32_t len)
     return wiced_hal_sflash_write(write_to, len, data);
 }
 
+// this function returns the firmware id and version from the DS header
+wiced_bool_t wiced_get_current_app_id_and_version(wiced_bt_application_id_t *app_id_and_version)
+{
+    return (sizeof(wiced_bt_application_id_t) == fw_upgrade_read_mem(  g_fw_upgrade.active_ds_location + 8,
+                                    (uint8_t *)app_id_and_version, sizeof(wiced_bt_application_id_t)));
+}
+
 #define PARTITION_ACTIVE    0
 #define PARTITION_UPGRADE   1
 
@@ -554,11 +619,5 @@ void wiced_bt_get_fw_image_chunk(uint8_t partition, uint32_t offset, uint8_t *p_
     {
         wiced_firmware_upgrade_retrieve_from_nv(offset, p_data, data_len);
     }
-}
-
-uint32_t wiced_bt_get_nv_sector_size()
-{
-    uint32_t sector_size = (sfi_sectorErase256K) ? WICED_FW_UPGRADE_SF_SECTOR_SIZE_256K : WICED_FW_UPGRADE_SF_SECTOR_SIZE_4K;
-    return sector_size;
 }
 #endif // CYW20835B1

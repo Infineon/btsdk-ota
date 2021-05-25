@@ -204,7 +204,7 @@ wiced_bool_t ota_fw_upgrade_command_handler(uint16_t conn_id, uint8_t command, u
             p_state->recv_crc32           = 0xffffffff;
 #endif
 
-#if ( defined(CYW20719B0) || defined(CYW20719B1) || defined(CYW20721B1) || defined(CYW20721B2) || defined(CYW20719B2) || defined(CYW20735B0) || defined(CYW20735B1) /*|| defined (CYW20819A1)*/)
+#if ( defined(CYW20719B0) || defined(CYW20719B1) || defined(CYW20721B1) || defined(CYW20721B2) || defined(CYW20719B2) || defined(CYW20735B0) || defined(CYW20735B1) || defined(CYW20835B1) /*|| defined (CYW20819A1)*/)
             // if we are using Secure version the total length comes in the beginning of the image,
             // do not use the one from the downloader.
             if (p_ecdsa_public_key != NULL)
