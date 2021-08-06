@@ -87,9 +87,6 @@ static void                   ota_fw_upgrade_reset_timeout(uint32_t param);
 extern UINT32 crc32_Update( UINT32 crc, UINT8 *buf, UINT16 len );
 extern uint32_t update_crc32(uint32_t crc, uint8_t *buf, uint16_t len);
 extern void allowPeripheralLatency(BOOL8 allow);
-// deprecated and renamed
-extern void allowSlaveLatency(BOOL8 allow);
-#define allowPeripheralLatency(x) allowSlaveLatency(x)
 
 /*
  * Process GATT Read request
@@ -402,12 +399,10 @@ wiced_bool_t ota_fw_upgrade_handle_command(uint16_t conn_id, uint8_t *data, int3
             p_state->current_offset       = 0;
             p_state->current_block_offset = 0;
             p_state->total_offset         = 0;
-            p_state->total_len            = data[1] + (data[2] << 8) + (data[3] << 16) + (data[4] << 24);
 #if OTA_UPGRADE_DEBUG
             p_state->recv_crc32           = 0xffffffff;
 #endif
 
-#if ( defined(CYW20719B0) || defined(CYW20719B1) || defined(CYW20721B1) || defined(CYW20721B2) || defined(CYW20719B2) || defined(CYW20735B0) || defined(CYW20735B1) || defined(CYW20835B1)/* || defined (CYW20819A1) */)
             // if we are using Secure version the total length comes in the beginning of the image,
             // do not use the one from the downloader.
             if (p_ecdsa_public_key != NULL)
@@ -418,7 +413,6 @@ wiced_bool_t ota_fw_upgrade_handle_command(uint16_t conn_id, uint8_t *data, int3
             {
                 p_state->total_len            = data[1] + (data[2] << 8) + (data[3] << 16) + (data[4] << 24);
             }
-#endif
             WICED_BT_TRACE("state %d total_len %d \n", p_state->state, data[1] + (data[2] << 8) + (data[3] << 16) + (data[4] << 24));
             ota_fw_upgrade_send_notification(conn_id, HANDLE_OTA_FW_UPGRADE_CONTROL_POINT, 1, &value);
             return WICED_TRUE;
