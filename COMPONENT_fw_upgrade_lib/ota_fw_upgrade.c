@@ -184,15 +184,10 @@ wiced_bt_gatt_status_t wiced_ota_fw_upgrade_indication_cfm_handler(uint16_t conn
             else
             {
                 // disconnect and start timer to trigger hardware reset 1 second later
-                wiced_result_t status;
                 wiced_bt_gatt_disconnect(conn_id);
                 wiced_deinit_timer(&ota_fw_upgrade_state.reset_timer);
                 wiced_init_timer(&ota_fw_upgrade_state.reset_timer, ota_fw_upgrade_reset_timeout, 0, WICED_SECONDS_TIMER);
-                status = wiced_start_timer(&ota_fw_upgrade_state.reset_timer, 1);
-                if (status != WICED_SUCCESS)
-                {
-                    WICED_BT_TRACE("%s: wiced_start_timer failed, status:%d \n", __func__, status);
-                }
+                wiced_start_timer(&ota_fw_upgrade_state.reset_timer, 1);
             }
         }
         return WICED_BT_GATT_SUCCESS;
@@ -286,14 +281,9 @@ int perform_verification(void *data)
             else
             {
                 // Start timer to disconnect in a second (parameter passed to the function is conn_id)
-                wiced_result_t status;
                 wiced_deinit_timer(&ota_fw_upgrade_state.reset_timer);
                 wiced_init_timer(&ota_fw_upgrade_state.reset_timer, ota_fw_upgrade_reset_timeout, conn_id, WICED_SECONDS_TIMER);
-                status = wiced_start_timer(&ota_fw_upgrade_state.reset_timer, 1);
-                if (status != WICED_SUCCESS)
-                {
-                    WICED_BT_TRACE("%s: wiced_start_timer failed, status:%d \n", __func__, status);
-                }
+                wiced_start_timer(&ota_fw_upgrade_state.reset_timer, 1);
             }
             return WICED_TRUE;
 #if !defined(OTA_FW_LIB_HCI_DFU)
@@ -657,15 +647,10 @@ void ota_fw_upgrade_reset_timeout(uint32_t param)
     // if conn_id is not zero, connection is still up, disconnect and start 1 second timer before reset
     if (ota_fw_upgrade_state.conn_id)
     {
-        wiced_result_t status;
         wiced_bt_gatt_disconnect(ota_fw_upgrade_state.conn_id);
         wiced_deinit_timer(&ota_fw_upgrade_state.reset_timer);
         wiced_init_timer(&ota_fw_upgrade_state.reset_timer, ota_fw_upgrade_reset_timeout, 0, WICED_SECONDS_TIMER);
-        status = wiced_start_timer(&ota_fw_upgrade_state.reset_timer, 1);
-        if (status != WICED_SUCCESS)
-        {
-            WICED_BT_TRACE("%s: wiced_start_timer failed, status:%d \n", __func__, status);
-        }
+        wiced_start_timer(&ota_fw_upgrade_state.reset_timer, 1);
     }
     else
        wiced_firmware_upgrade_finish();

@@ -282,7 +282,6 @@ wiced_bool_t ota_fw_upgrade_command_handler(uint16_t conn_id, uint8_t command, u
                 }
                 else
                 {
-                    wiced_result_t status;
                     //notify application that we are going down
                     if (ota_fw_upgrade_status_callback)
                     {
@@ -291,11 +290,7 @@ wiced_bool_t ota_fw_upgrade_command_handler(uint16_t conn_id, uint8_t command, u
                     // init timer for detect packet retransmission
                     wiced_deinit_timer(&ota_fw_upgrade_state.reset_timer);
                     wiced_init_timer(&ota_fw_upgrade_state.reset_timer, ota_fw_upgrade_reset_timer_timeout, 0, WICED_SECONDS_TIMER);
-                    status = wiced_start_timer(&ota_fw_upgrade_state.reset_timer, 1);
-                    if (status != WICED_SUCCESS)
-                    {
-                        WICED_BT_TRACE("%s: wiced_start_timer failed, status:%d \n", __func__, status);
-                    }
+                    wiced_start_timer(&ota_fw_upgrade_state.reset_timer, 1);
                     return WICED_TRUE;
                 }
             }

@@ -332,34 +332,45 @@ void MP_MultMont(DWORD *c, DWORD *a, DWORD *b, UINT32 keyLength)
 BOOL32 ecdsa_verify_(unsigned char* digest, unsigned char* signature, Point* key)
 {
     UINT32 i;
-#if 0
-    Point p1, p2;
-    DWORD e[KEY_LENGTH_DWORDS];
-    DWORD r[KEY_LENGTH_DWORDS];
-    DWORD s[KEY_LENGTH_DWORDS];
+    unsigned char signature_test[KEY_LENGTH_BYTES * 2];
+    Point *p1, *p2;
+    DWORD *e, *r, *s, *u1, *u2, *tmp1, *tmp2;
 
-    DWORD u1[KEY_LENGTH_DWORDS];
-    DWORD u2[KEY_LENGTH_DWORDS];
+   // Check if the signature is valid. All zero is invalid.
+   memset(signature_test, 0, KEY_LENGTH_BYTES * 2);
+   if (memcmp(signature_test, signature, KEY_LENGTH_BYTES * 2) == 0)
+   {
+       WICED_BT_TRACE("Error, signature is zeros\n");
+       return FALSE;
+   }
 
-    DWORD tmp1[KEY_LENGTH_DWORDS];
-    DWORD tmp2[KEY_LENGTH_DWORDS];
-#else
-    Point *p1 = (Point *)wiced_bt_get_buffer(sizeof(Point));
-    Point *p2 = (Point *)wiced_bt_get_buffer(sizeof(Point));
-    DWORD *e = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
-    DWORD *r = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
-    DWORD *s = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
-    DWORD *u1 = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
-    DWORD *u2 = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
-    DWORD *tmp1 = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
-    DWORD *tmp2 = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
+    p1 = (Point *)wiced_bt_get_buffer(sizeof(Point));
+    p2 = (Point *)wiced_bt_get_buffer(sizeof(Point));
+    e = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
+    r = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
+    s = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
+    u1 = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
+    u2 = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
+    tmp1 = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
+    tmp2 = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
 
     if (!p1 || !p2 || !e || !r || !s || !u1 || !u2 || !tmp1 || !tmp2)
     {
-	WICED_BT_TRACE("no mem\n");
-	return FALSE;
+        if(p1) wiced_bt_free_buffer(p1);
+        if(p2) wiced_bt_free_buffer(p2);
+        if(e) wiced_bt_free_buffer(e);
+        if(r) wiced_bt_free_buffer(r);
+        if(s) wiced_bt_free_buffer(s);
+        if(u1) wiced_bt_free_buffer(u1);
+        if(u2) wiced_bt_free_buffer(u2);
+        if(tmp1) wiced_bt_free_buffer(tmp1);
+        if(tmp2) wiced_bt_free_buffer(tmp2);
+
+        WICED_BT_TRACE("no mem\n");
+        return FALSE;
     }
-#endif
+
+
     // swap input data endianess
     for (i = 0; i < KEY_LENGTH_DWORDS; i++)
    {
