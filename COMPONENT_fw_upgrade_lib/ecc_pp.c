@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2021, Cypress Semiconductor Corporation (an Infineon company) or
+ * Copyright 2016-2022, Cypress Semiconductor Corporation (an Infineon company) or
  * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
  *
  * This software, including source code, documentation and related
@@ -502,4 +502,166 @@ BOOL32 ecdsa_verify_(unsigned char* digest, unsigned char* signature, Point* key
     wiced_bt_free_buffer(tmp2);
 #endif
     return i;
+}
+
+int ecdsa_sign_(unsigned char* digest, unsigned char* signature, unsigned char* privateKey, unsigned char* randomK)
+{
+#if 0
+    UINT32 kprime[KEY_LENGTH_DWORDS];
+    UINT32 k[KEY_LENGTH_DWORDS];
+    UINT32 da[KEY_LENGTH_DWORDS];
+    UINT32 e[KEY_LENGTH_DWORDS];
+
+    // signature part 1
+    UINT32 r[KEY_LENGTH_DWORDS];
+
+    // signature part 2
+    UINT32 s[KEY_LENGTH_DWORDS];
+
+    // intermediate result
+    UINT32 tmp1[KEY_LENGTH_DWORDS];
+    UINT32 tmp2[KEY_LENGTH_DWORDS];
+    UINT32 tmp3[KEY_LENGTH_DWORDS];
+
+    Point p;
+#else
+    DWORD *kprime = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
+    DWORD *k = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
+    DWORD *da = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
+    DWORD *e = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
+    DWORD *r = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
+    DWORD *s = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
+    DWORD *tmp1 = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
+    DWORD *tmp2 = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
+    DWORD *tmp3 = (DWORD *)wiced_bt_get_buffer(KEY_LENGTH_DWORDS * sizeof(DWORD));
+    Point *p = (Point *)wiced_bt_get_buffer(sizeof(Point));
+
+    if (!kprime || !k || !da || !e || !r || !s || !tmp1 || !tmp2 || !tmp3 || !p)
+    {
+        WICED_BT_TRACE("no mem\n");
+        return FALSE;
+    }
+#endif
+    UINT32 i;
+
+    /////////////////////////////////////////////////
+    // check input and swap endianess
+    /////////////////////////////////////////////////
+
+    // swap input endianess
+    for(i = 0; i < KEY_LENGTH_DWORDS; i++)
+    {
+        // k = randomK
+        k[KEY_LENGTH_DWORDS-1-i] = BE_SWAP(randomK, 4*i);
+
+        // da = private key
+        da[KEY_LENGTH_DWORDS-1-i] = BE_SWAP(privateKey, 4*i);
+
+        // e = digest
+        e[KEY_LENGTH_DWORDS-1-i] = BE_SWAP(digest, 4*i);
+    }
+
+    // random number should not be zero
+    if(MP_isZero(k, KEY_LENGTH_DWORDS)) return FALSE;
+
+    /////////////////////////////////////////////////
+    // step 1: k' = k ^ -1 mod n
+    /////////////////////////////////////////////////
+    memcpy(tmp1, k, KEY_LENGTH_DWORDS * sizeof(DWORD));
+    MP_InvMod_(kprime, tmp1, modn, KEY_LENGTH_DWORDS);
+
+    /////////////////////////////////////////////////
+    // step 2 : p = k * G
+    /////////////////////////////////////////////////
+    ECC_PM(p, &(curve_p256.G), k, KEY_LENGTH_DWORDS);
+
+    /////////////////////////////////////////////////
+    // step 3: r = x-coordinate of (k * G) mod n
+    /////////////////////////////////////////////////
+
+    // 3.1 r = x-coordinate of (k * G)
+    MP_Copy(r, p->x, KEY_LENGTH_DWORDS);
+
+    // 3.2 r = r mod n
+    while(MP_CMP(r, modn, KEY_LENGTH_DWORDS) >= 0)
+        MP_Sub(r, r, modn, KEY_LENGTH_DWORDS);
+
+    // 3.3 fail if r == 0
+    if(MP_isZero(r, KEY_LENGTH_DWORDS)) return FALSE;
+
+    /////////////////////////////////////////////////
+    // step 4: compute da * r mod n
+    /////////////////////////////////////////////////
+
+    // 4.1 convert r to montgomery domain
+    MP_MultMont(tmp1, r, (DWORD*)rr, KEY_LENGTH_DWORDS);
+
+    // 4.2 convert da to montgomery domain
+    MP_MultMont(tmp2, da, (DWORD*)rr, KEY_LENGTH_DWORDS);
+
+    // 4.3 compute da * r mod n
+    MP_MultMont(tmp3, tmp2, tmp1, KEY_LENGTH_DWORDS);
+
+    // 4.4 let da = 1
+    MP_Init(da, KEY_LENGTH_DWORDS);
+    da[0]=1;
+
+    // 4.5 convert to normal domain
+    MP_MultMont(s, tmp3, da, KEY_LENGTH_DWORDS);
+
+    /////////////////////////////////////////////////
+    // step 5: compute e + da * r mod n
+    /////////////////////////////////////////////////
+    if(MP_Add(tmp3, s, e, KEY_LENGTH_DWORDS)!=0)
+        MP_Sub(tmp3, tmp3, modn, KEY_LENGTH_DWORDS);
+
+    /////////////////////////////////////////////////
+    // step 6: compute s = k' * (e + da*r)
+    /////////////////////////////////////////////////
+
+    // 6.1 conver to montgomery domain
+    MP_MultMont(tmp1, tmp3, (DWORD*)rr, KEY_LENGTH_DWORDS);
+
+    // 6.2 convert k' to montgomery domain
+    MP_MultMont(tmp2, kprime, (DWORD*)rr, KEY_LENGTH_DWORDS);
+
+    // 6.3 compute k' * (e + da * r)
+    MP_MultMont(tmp3, tmp1, tmp2, KEY_LENGTH_DWORDS);
+
+    // 6.4 convert to normal domain
+    MP_MultMont(s, tmp3, da, KEY_LENGTH_DWORDS);
+
+    // 6.5 s should not be zero
+    if(MP_isZero(s, KEY_LENGTH_DWORDS)) return FALSE;
+
+    /////////////////////////////////////////////////
+    // dump signature
+    /////////////////////////////////////////////////
+    for(i = 0; i < KEY_LENGTH_DWORDS*2; i++)
+    {
+        UINT32 tmp32;
+
+        if(i < KEY_LENGTH_DWORDS)
+            tmp32 = r[KEY_LENGTH_DWORDS - 1 - i];
+        else
+            tmp32 = s[2*KEY_LENGTH_DWORDS - 1 - i];
+
+        signature[4*i] = (tmp32 >> 24) & 0xff;
+        signature[4*i+1] = (tmp32 >> 16) & 0xff;
+        signature[4*i+2] = (tmp32 >> 8) & 0xff;
+        signature[4*i+3] = (tmp32 >> 0) & 0xff;
+    }
+
+    wiced_bt_free_buffer(kprime);
+    wiced_bt_free_buffer(k);
+    wiced_bt_free_buffer(da);
+    wiced_bt_free_buffer(e);
+    wiced_bt_free_buffer(r);
+    wiced_bt_free_buffer(s);
+    wiced_bt_free_buffer(tmp1);
+    wiced_bt_free_buffer(tmp2);
+    wiced_bt_free_buffer(tmp3);
+    wiced_bt_free_buffer(p);
+
+    return TRUE;
 }

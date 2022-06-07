@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2021, Cypress Semiconductor Corporation (an Infineon company) or
+ * Copyright 2016-2022, Cypress Semiconductor Corporation (an Infineon company) or
  * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
  *
  * This software, including source code, documentation and related
@@ -90,6 +90,7 @@ void InitPoint(Point *q);
 void ECC_Double(Point *q, Point *p, UINT32 keyLength);
 void CopyPoint(Point *q, Point *p);
 BOOL32 ecdsa_verify_(unsigned char* digest, unsigned char* signature, Point* key);
+int ecdsa_sign_(unsigned char* digest, unsigned char* signature, unsigned char* privateKey, unsigned char* randomK);
 
 #ifdef __cplusplus
 }

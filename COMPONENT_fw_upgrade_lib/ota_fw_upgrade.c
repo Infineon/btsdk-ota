@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2021, Cypress Semiconductor Corporation (an Infineon company) or
+ * Copyright 2016-2022, Cypress Semiconductor Corporation (an Infineon company) or
  * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
  *
  * This software, including source code, documentation and related
@@ -395,11 +395,13 @@ wiced_bool_t ota_fw_upgrade_handle_command(uint16_t conn_id, uint8_t *data, int3
 
             // if we are using Secure version the total length comes in the beginning of the image,
             // do not use the one from the downloader.
+#ifndef CYW20706A2
             if (p_ecdsa_public_key != NULL)
             {
                 p_state->total_len            = 0;
             }
             else
+#endif
             {
                 p_state->total_len            = data[1] + (data[2] << 8) + (data[3] << 16) + (data[4] << 24);
             }
