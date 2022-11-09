@@ -89,7 +89,7 @@ void print_hex_buffer(uint8_t *buf, uint32_t len);
 #elif defined(CYBT_253059_EVAL)
     #define GPIO_DS2_PUART_TXD WICED_P32
     #define GPIO_DS2_PUART_RXD WICED_P37
-#elif defined(CYW920819EVB_02) || defined(CYW920820EVB_02) || defined(CYW989820EVB_01) || defined (CYW920820M2EVB_01)
+#elif defined(CYW920819EVB_02) || defined(CYW920820EVB_02) || defined(CYW989820EVB_01) || defined (CYW920820M2EVB_01) || defined (CYW920819M2EVB_01) || defined (CYW989820M2EVB_01)
     #define GPIO_DS2_PUART_TXD WICED_P32
     #define GPIO_DS2_PUART_RXD WICED_P37
     #define GPIO_DS2_SPI2_MOSI WICED_P06

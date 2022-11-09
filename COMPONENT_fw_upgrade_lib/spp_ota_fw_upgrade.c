@@ -33,9 +33,9 @@
 
 /** @file
  *
- * WICED Bluetooth OTA Upgrade using either SPP or BLE OTP protocol.
+ * AIROC Bluetooth OTA Upgrade using either SPP or LE OTP protocol.
  *
- * This file provides function required to support Over the Air WICED Upgrade.
+ * This file provides function required to support Over the Air Upgrade.
  * Both secure and none secure services are supported.  In the none-secure
  * case the software is only protected by the checksum.  In the secure case
  * the image is protected with a digital signature which is verified using
@@ -204,7 +204,7 @@ wiced_bool_t ota_fw_upgrade_command_handler(uint16_t conn_id, uint8_t command, u
             p_state->recv_crc32           = 0xffffffff;
 #endif
 
-#if ( defined(CYW20719B0) || defined(CYW20719B1) || defined(CYW20721B1) || defined(CYW20721B2) || defined(CYW20719B2) || defined(CYW20735B0) || defined(CYW20735B1) || defined(CYW20835B1) /*|| defined (CYW20819A1)*/)
+#if ( defined(CYW20719B1) || defined(CYW20721B1) || defined(CYW20721B2) || defined(CYW20719B2) || defined(CYW20835B1) /*|| defined (CYW20819A1)*/)
             // if we are using Secure version the total length comes in the beginning of the image,
             // do not use the one from the downloader.
             if (p_ecdsa_public_key != NULL)
