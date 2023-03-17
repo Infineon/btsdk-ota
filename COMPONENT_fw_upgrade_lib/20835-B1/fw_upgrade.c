@@ -1,5 +1,5 @@
 /*
- * Copyright 2016-2022, Cypress Semiconductor Corporation (an Infineon company) or
+ * Copyright 2016-2023, Cypress Semiconductor Corporation (an Infineon company) or
  * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
  *
  * This software, including source code, documentation and related
@@ -422,7 +422,7 @@ wiced_bool_t wiced_firmware_upgrade_random_write_start(uint32_t start, uint32_t 
     if (p_gdata->random_write_mode)
         wiced_firmware_upgrade_random_write_stop();
 
-    write_bitfield_bytes = ((size / sector_size) + 7) / 8;
+    write_bitfield_bytes = (((size + sector_size - 1) / sector_size) + 7) / 8;
     p_gdata->random_write_bitfield = wiced_bt_get_buffer(write_bitfield_bytes);
     if (!p_gdata->random_write_bitfield)
         return WICED_FALSE;
