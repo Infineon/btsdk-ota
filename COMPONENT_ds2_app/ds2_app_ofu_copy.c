@@ -83,7 +83,7 @@ void print_hex_buffer(uint8_t *buf, uint32_t len);
 #elif defined (CYBT_263065_EVAL) || defined (CYBT_273063_EVAL)
 	#define GPIO_DS2_PUART_TXD WICED_P03
     #define GPIO_DS2_PUART_RXD WICED_P37
-#elif defined(CYBT_243053_EVAL)
+#elif defined(CYBT_243053_EVAL)  || defined (Vela_IF820_INT_ANT_DVK) || defined (Vela_IF820_EXT_ANT_DVK)
     #define GPIO_DS2_PUART_TXD WICED_P32
     #define GPIO_DS2_PUART_RXD WICED_P37
 #elif defined(CYBT_253059_EVAL)
